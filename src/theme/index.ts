@@ -45,3 +45,6 @@ export const overlayStates = {
   running: { label: "RUNNING", color: colors.green, bg: "rgba(74,124,89,0.15)" },
   error: { label: "ERROR", color: colors.red, bg: "rgba(168,50,50,0.12)" },
 } as const;
+
+// Alias for uppercase import convention used by components
+export { colors as Colors };

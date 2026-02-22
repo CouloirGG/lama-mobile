@@ -16,6 +16,20 @@ export interface PricedItem {
   base_type?: string;
 }
 
+// ─── Exchange Rates ─────────────────────────────────────────────
+export interface ExchangeRates {
+  divine_to_chaos: number;
+  divine_to_exalted: number;
+  mirror_to_divine: number;
+}
+
+// ─── League Info ────────────────────────────────────────────────
+export interface LeagueInfo {
+  value: string;
+  label: string;
+  divinePrice: number;
+}
+
 // ─── Watchlist (from watchlist.py) ──────────────────────────────
 export interface WatchlistQuery {
   id: string;
