@@ -17,3 +17,4 @@
 export { default as Panel } from "./Panel";
 export { default as GoldDivider } from "./GoldDivider";
 export { default as KPIBar } from "./KPIBar";
+export { default as Sparkline } from "./Sparkline";

@@ -30,6 +30,26 @@ export interface LeagueInfo {
   divinePrice: number;
 }
 
+// ─── Currency Lines (from poe.ninja) ────────────────────────────
+export interface CurrencyLine {
+  name: string;
+  divine_value: number;
+  chaos_value: number;
+  sparkline_data: number[];   // 7-day cumulative % changes
+  sparkline_change: number;   // net 7-day % change
+  volume: number;             // 24h trade volume
+  image_url: string;
+}
+
+// ─── Local Rate Snapshots (AsyncStorage) ────────────────────────
+export interface RateSnapshot {
+  timestamp: number;
+  divine_to_chaos: number;
+  divine_to_exalted: number;
+  mirror_to_divine: number;
+  league: string;
+}
+
 // ─── Watchlist (from watchlist.py) ──────────────────────────────
 export interface WatchlistQuery {
   id: string;
