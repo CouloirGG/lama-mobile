@@ -10,6 +10,7 @@ import {
   StyleSheet,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, tierColors } from "../theme";
 import { KPIBar, Panel } from "../components";
 import { useSettings } from "../hooks/useSettings";
@@ -94,7 +95,7 @@ export default function MarketScreen() {
   );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* KPI Bar */}
       <KPIBar rates={rates} />
 
@@ -174,7 +175,7 @@ export default function MarketScreen() {
           }
         />
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

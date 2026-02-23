@@ -12,6 +12,7 @@ import { StatusBar } from "expo-status-bar";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { View, Text, StyleSheet } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { MarketScreen, TrendsScreen, WatchScreen, LAMAScreen } from "./src/screens";
 import { Colors } from "./src/theme";
@@ -47,6 +48,7 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 
 export default function App() {
   return (
+    <SafeAreaProvider>
     <NavigationContainer
       theme={{
         dark: true,
@@ -80,7 +82,6 @@ export default function App() {
             borderTopColor: Colors.borderGold,
             borderTopWidth: 1,
             paddingTop: 4,
-            height: 60,
           },
           tabBarLabelStyle: {
             fontSize: 9,
@@ -96,5 +97,6 @@ export default function App() {
         <Tab.Screen name="LAMA" component={LAMAScreen} />
       </Tab.Navigator>
     </NavigationContainer>
+    </SafeAreaProvider>
   );
 }

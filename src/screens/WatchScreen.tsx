@@ -9,6 +9,7 @@ import {
   StyleSheet,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, tierColors } from "../theme";
 import { KPIBar, Panel } from "../components";
 import { useSettings } from "../hooks/useSettings";
@@ -184,7 +185,7 @@ export default function WatchScreen() {
   // ─── Render ───────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* KPI Bar — hidden during search to maximize space */}
       {!isSearching && <KPIBar rates={rates} />}
 
@@ -284,7 +285,7 @@ export default function WatchScreen() {
           />
         </>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 

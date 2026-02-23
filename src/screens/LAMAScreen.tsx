@@ -1,13 +1,23 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, DevSettings, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors } from "../theme";
 
 export default function LAMAScreen() {
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <Text style={styles.placeholder}>LAMA</Text>
       <Text style={styles.hint}>See mockup for UI reference</Text>
-    </View>
+
+      {__DEV__ && (
+        <Pressable
+          style={styles.reloadButton}
+          onPress={() => DevSettings.reload()}
+        >
+          <Text style={styles.reloadText}>Reload App</Text>
+        </Pressable>
+      )}
+    </SafeAreaView>
   );
 }
 
@@ -28,5 +38,19 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontSize: 12,
     marginTop: 8,
+  },
+  reloadButton: {
+    marginTop: 32,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.gold,
+    backgroundColor: "rgba(196, 164, 86, 0.1)",
+  },
+  reloadText: {
+    color: Colors.gold,
+    fontWeight: "700",
+    fontSize: 14,
   },
 });

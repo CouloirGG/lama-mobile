@@ -8,6 +8,7 @@ import {
   StyleSheet,
   RefreshControl,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors } from "../theme";
 import { KPIBar, Panel, GoldDivider, Sparkline } from "../components";
 import { useSettings } from "../hooks/useSettings";
@@ -290,7 +291,7 @@ export default function TrendsScreen() {
 
   if (error) {
     return (
-      <View style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <KPIBar rates={rates} />
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
@@ -298,12 +299,12 @@ export default function TrendsScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <FlatList
         data={lines}
         renderItem={renderItem}
@@ -334,7 +335,7 @@ export default function TrendsScreen() {
           )
         }
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
