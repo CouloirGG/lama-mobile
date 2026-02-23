@@ -7,6 +7,7 @@ export {
   assignTier,
   formatDisplay,
   setCache,
+  fetchUniquePricesForSlot,
   CATEGORIES,
 } from "./poe2scout";
 export type { CategoryId } from "./poe2scout";
@@ -27,3 +28,4 @@ export {
   fetchCharacter,
   clearBuildsCache,
 } from "./poeninjaBuilds";
+export { fetchPopularItems } from "./poeninjaBuildsSearch";

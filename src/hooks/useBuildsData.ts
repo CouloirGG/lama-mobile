@@ -6,6 +6,7 @@
  *   skillDetail     — anoints for a selected skill
  *   characterLookup — account/character input form
  *   characterResult — full character profile
+ *   popularItems    — popular items for a slot
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -15,7 +16,9 @@ import type {
   PopularSkill,
   PopularAnoint,
   CharacterData,
+  CharacterItem,
   DecodedBuild,
+  PopularItemsResult,
 } from "../types";
 import {
   fetchSnapshotInfo,
@@ -25,13 +28,26 @@ import {
   fetchCharacter,
   clearBuildsCache,
 } from "../services/poeninjaBuilds";
+import { fetchPopularItems } from "../services/poeninjaBuildsSearch";
+import { fetchUniquePricesForSlot } from "../services/poe2scout";
 import { decodePobCode } from "../utils/pobDecoder";
+
+// ─── Slot → poe2scout unique slug mapping ────────────────────────
+
+function slotToUniqueSlug(slot: string): string | null {
+  if (["Helm", "Helmet", "BodyArmour", "Body Armour", "Gloves", "Boots", "Shield", "Offhand"].includes(slot)) return "armour";
+  if (["Belt", "Amulet", "Ring", "Ring2"].includes(slot)) return "accessory";
+  if (["Weapon", "Weapon2"].includes(slot)) return "weapon";
+  if (slot === "Flask") return "flask";
+  return null;
+}
 
 export type BuildsViewMode =
   | "meta"
   | "skillDetail"
   | "characterLookup"
-  | "characterResult";
+  | "characterResult"
+  | "popularItems";
 
 export function useBuildsData() {
   const [snapshotInfo, setSnapshotInfo] = useState<BuildSnapshotInfo | null>(null);
@@ -49,6 +65,10 @@ export function useBuildsData() {
   const [decodedBuild, setDecodedBuild] = useState<DecodedBuild | null>(null);
   const [decoding, setDecoding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Popular items state
+  const [popularItemsResult, setPopularItemsResult] = useState<PopularItemsResult | null>(null);
+  const [popularItemsLoading, setPopularItemsLoading] = useState(false);
 
   // ─── Init flow ──────────────────────────────────────────────────
 
@@ -159,8 +179,82 @@ export function useBuildsData() {
     }
   }, [snapshotInfo, accountInput, characterInput]);
 
+  const showPopularItemsForSlot = useCallback(
+    async (slotName: string, currentItem: CharacterItem | null) => {
+      if (!snapshotInfo || !characterData) return;
+
+      setViewMode("popularItems");
+      setPopularItemsLoading(true);
+      setPopularItemsResult(null);
+
+      // Use ascendancy (or base class) + top skill for the search filter
+      const charClass = characterData.ascendancy || characterData.class;
+
+      // Get the character's main skill (first skill group's first gem, or top DPS skill)
+      let mainSkill = "";
+      for (const sg of characterData.skillGroups) {
+        for (const d of sg.dps) {
+          if (d.damage > 0 && (!mainSkill || d.damage > 0)) {
+            mainSkill = d.name;
+            break;
+          }
+        }
+        if (mainSkill) break;
+      }
+      // Fallback to first gem
+      if (!mainSkill && characterData.skillGroups.length > 0) {
+        mainSkill = characterData.skillGroups[0].gems[0] ?? "";
+      }
+
+      try {
+        const result = await fetchPopularItems(
+          snapshotInfo.version,
+          snapshotInfo.snapshotName,
+          charClass,
+          mainSkill,
+          slotName
+        );
+
+        // Attach the full current item
+        result.currentItem = currentItem;
+
+        // Fetch unique item prices from poe2scout and merge into results
+        const slug = slotToUniqueSlug(slotName);
+        if (slug) {
+          try {
+            const prices = await fetchUniquePricesForSlot(slug);
+            for (const item of result.items) {
+              if (item.rarity !== "unique") continue;
+              const priceText = prices.get(item.name);
+              if (priceText) {
+                item.priceText = priceText;
+              }
+            }
+          } catch {
+            // Price fetch failure is non-fatal — items still render without prices
+          }
+        }
+
+        setPopularItemsResult(result);
+      } catch (err) {
+        console.warn("Failed to fetch popular items:", err);
+        setPopularItemsResult({
+          slot: slotName,
+          items: [],
+          currentItem,
+        });
+      } finally {
+        setPopularItemsLoading(false);
+      }
+    },
+    [snapshotInfo, characterData]
+  );
+
   const goBack = useCallback(() => {
-    if (viewMode === "characterResult") {
+    if (viewMode === "popularItems") {
+      setViewMode("characterResult");
+      setPopularItemsResult(null);
+    } else if (viewMode === "characterResult") {
       setViewMode("characterLookup");
       setDecodedBuild(null);
     } else if (viewMode === "characterLookup" || viewMode === "skillDetail") {
@@ -178,6 +272,7 @@ export function useBuildsData() {
     setSkillAnoints([]);
     setCharacterData(null);
     setDecodedBuild(null);
+    setPopularItemsResult(null);
     setError(null);
     await init();
   }, [init]);
@@ -200,9 +295,12 @@ export function useBuildsData() {
     anointsLoading,
     characterLoading,
     error,
+    popularItemsResult,
+    popularItemsLoading,
     selectSkill,
     openCharacterLookup,
     lookupCharacter,
+    showPopularItemsForSlot,
     goBack,
     refresh,
   };

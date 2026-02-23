@@ -11,6 +11,7 @@ import {
   ScrollView,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import * as WebBrowser from "expo-web-browser";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors } from "../theme";
 import { Panel } from "../components";
@@ -22,6 +23,8 @@ import type {
   CharacterItem,
   CharacterSkillGroup,
   DecodedBuild,
+  PopularItem,
+  PopularItemsResult,
 } from "../types";
 
 // ─── Helpers ────────────────────────────────────────────────────
@@ -421,7 +424,13 @@ function BuildStatsSection({
   );
 }
 
-function ExpandableEquipItem({ item }: { item: CharacterItem }) {
+function ExpandableEquipItem({
+  item,
+  onShowPopular,
+}: {
+  item: CharacterItem;
+  onShowPopular?: (slotName: string, currentItem: CharacterItem) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
 
   const allMods = useMemo(() => {
@@ -474,6 +483,15 @@ function ExpandableEquipItem({ item }: { item: CharacterItem }) {
               </Text>
             ))
           )}
+          {onShowPopular && (
+            <Pressable
+              style={styles.popularLink}
+              onPress={() => onShowPopular(item.slot, item)}
+              hitSlop={4}
+            >
+              <Text style={styles.popularLinkText}>View Popular Items for Slot</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </View>
@@ -485,15 +503,24 @@ function CharacterProfileView({
   decodedBuild,
   decoding,
   onBack,
+  onShowPopular,
 }: {
   character: import("../types").CharacterData;
   decodedBuild: DecodedBuild | null;
   decoding: boolean;
   onBack: () => void;
+  onShowPopular: (slotName: string, currentItem: CharacterItem) => void;
 }) {
   const handleCopyPOB = useCallback(async () => {
     if (character.pobCode) {
       await Clipboard.setStringAsync(character.pobCode);
+    }
+  }, [character.pobCode]);
+
+  const handleOpenPOB = useCallback(async () => {
+    if (character.pobCode) {
+      const url = `https://pob.cool/poe2#build=${encodeURIComponent(character.pobCode)}`;
+      await WebBrowser.openBrowserAsync(url);
     }
   }, [character.pobCode]);
 
@@ -528,7 +555,11 @@ function CharacterProfileView({
         <View>
           <Text style={styles.sectionHeader}>EQUIPMENT</Text>
           {character.equipment.map((item: CharacterItem, idx: number) => (
-            <ExpandableEquipItem key={`${item.slot}-${idx}`} item={item} />
+            <ExpandableEquipItem
+              key={`${item.slot}-${idx}`}
+              item={item}
+              onShowPopular={onShowPopular}
+            />
           ))}
         </View>
       )}
@@ -564,11 +595,499 @@ function CharacterProfileView({
         </View>
       )}
 
-      {/* POB Code */}
+      {/* POB Buttons */}
       {character.pobCode && (
-        <Pressable style={styles.pobButton} onPress={handleCopyPOB}>
-          <Text style={styles.pobButtonText}>Copy POB Code</Text>
+        <View style={styles.pobButtonRow}>
+          <Pressable style={styles.pobButton} onPress={handleCopyPOB}>
+            <Text style={styles.pobButtonText}>Copy POB Code</Text>
+          </Pressable>
+          <Pressable style={styles.pobButton} onPress={handleOpenPOB}>
+            <Text style={styles.pobButtonText}>Open in POB</Text>
+          </Pressable>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+// ─── Popular Items View ─────────────────────────────────────────
+
+function CurrentItemMods({ item }: { item: CharacterItem }) {
+  const sections = useMemo(() => {
+    const result: Array<{ label: string; mods: string[]; color: string }> = [];
+    if (item.enchantMods?.length)
+      result.push({ label: "Enchant", mods: item.enchantMods, color: Colors.cyan });
+    if (item.implicitMods?.length)
+      result.push({ label: "Implicit", mods: item.implicitMods, color: Colors.textSecondary });
+    if (item.explicitMods?.length)
+      result.push({ label: "Explicit", mods: item.explicitMods, color: Colors.text });
+    if (item.fracturedMods?.length)
+      result.push({ label: "Fractured", mods: item.fracturedMods, color: Colors.gold });
+    if (item.craftedMods?.length)
+      result.push({ label: "Crafted", mods: item.craftedMods, color: Colors.cyan });
+    if (item.desecratedMods?.length)
+      result.push({ label: "Desecrated", mods: item.desecratedMods, color: Colors.purple });
+    if (item.runeMods?.length)
+      result.push({ label: "Rune", mods: item.runeMods, color: Colors.amber });
+    return result;
+  }, [item]);
+
+  if (sections.length === 0) return null;
+
+  return (
+    <View style={styles.currentItemMods}>
+      {item.typeLine && item.name ? (
+        <Text style={styles.modBase}>{item.typeLine}</Text>
+      ) : null}
+      {sections.map((section) =>
+        section.mods.map((mod, mi) => (
+          <Text
+            key={`${section.label}-${mi}`}
+            style={[styles.modText, { color: section.color }]}
+          >
+            {mod}
+          </Text>
+        ))
+      )}
+    </View>
+  );
+}
+
+// ─── Mod value parsing ──────────────────────────────────────────
+
+interface ParsedStats {
+  life: number;
+  mana: number;
+  energyShield: number;
+  fireRes: number;
+  coldRes: number;
+  lightningRes: number;
+  chaosRes: number;
+  strength: number;
+  dexterity: number;
+  intelligence: number;
+  movementSpeed: number;
+  attackSpeed: number;
+  otherLines: string[];
+}
+
+const STAT_PATTERNS: Array<{
+  key: keyof ParsedStats;
+  pattern: RegExp;
+}> = [
+  { key: "life", pattern: /\+?(\d+) to maximum Life/i },
+  { key: "mana", pattern: /\+?(\d+) to maximum Mana/i },
+  { key: "energyShield", pattern: /\+?(\d+) to maximum Energy Shield/i },
+  { key: "fireRes", pattern: /\+?(\d+)%? (?:to )?Fire Resistance/i },
+  { key: "coldRes", pattern: /\+?(\d+)%? (?:to )?Cold Resistance/i },
+  { key: "lightningRes", pattern: /\+?(\d+)%? (?:to )?Lightning Resistance/i },
+  { key: "chaosRes", pattern: /\+?(\d+)%? (?:to )?Chaos Resistance/i },
+  { key: "strength", pattern: /\+?(\d+) to Strength/i },
+  { key: "dexterity", pattern: /\+?(\d+) to Dexterity/i },
+  { key: "intelligence", pattern: /\+?(\d+) to Intelligence/i },
+  { key: "movementSpeed", pattern: /(\d+)% increased Movement Speed/i },
+  { key: "attackSpeed", pattern: /(\d+)% increased Attack Speed/i },
+];
+
+function parseItemStats(item: CharacterItem): ParsedStats {
+  const stats: ParsedStats = {
+    life: 0, mana: 0, energyShield: 0,
+    fireRes: 0, coldRes: 0, lightningRes: 0, chaosRes: 0,
+    strength: 0, dexterity: 0, intelligence: 0,
+    movementSpeed: 0, attackSpeed: 0,
+    otherLines: [],
+  };
+
+  const allMods = [
+    ...(item.implicitMods ?? []),
+    ...(item.explicitMods ?? []),
+    ...(item.craftedMods ?? []),
+    ...(item.enchantMods ?? []),
+    ...(item.fracturedMods ?? []),
+    ...(item.runeMods ?? []),
+  ];
+
+  for (const mod of allMods) {
+    let matched = false;
+    for (const { key, pattern } of STAT_PATTERNS) {
+      const m = mod.match(pattern);
+      if (m) {
+        (stats[key] as number) += parseInt(m[1], 10);
+        matched = true;
+        break;
+      }
+    }
+    // Also check for combined resist mods like "+X% to Fire and Cold Resistance"
+    if (!matched) {
+      const dualRes = mod.match(/\+?(\d+)%? to (Fire|Cold|Lightning|Chaos) and (Fire|Cold|Lightning|Chaos) Resistance/i);
+      if (dualRes) {
+        const val = parseInt(dualRes[1], 10);
+        const a = dualRes[2].toLowerCase();
+        const b = dualRes[3].toLowerCase();
+        if (a === "fire" || b === "fire") stats.fireRes += val;
+        if (a === "cold" || b === "cold") stats.coldRes += val;
+        if (a === "lightning" || b === "lightning") stats.lightningRes += val;
+        if (a === "chaos" || b === "chaos") stats.chaosRes += val;
+        matched = true;
+      }
+    }
+    // Check "to all Elemental Resistances"
+    if (!matched) {
+      const allEleRes = mod.match(/\+?(\d+)%? to all Elemental Resistances/i);
+      if (allEleRes) {
+        const val = parseInt(allEleRes[1], 10);
+        stats.fireRes += val;
+        stats.coldRes += val;
+        stats.lightningRes += val;
+        matched = true;
+      }
+    }
+  }
+
+  return stats;
+}
+
+function ItemStatSummary({ item, allEquipment }: { item: CharacterItem; allEquipment: CharacterItem[] }) {
+  const stats = useMemo(() => parseItemStats(item), [item]);
+
+  // Character-level resist totals from ALL gear
+  const charResists = useMemo(() => {
+    let fire = 0, cold = 0, lightning = 0, chaos = 0;
+    for (const equip of allEquipment) {
+      const s = parseItemStats(equip);
+      fire += s.fireRes;
+      cold += s.coldRes;
+      lightning += s.lightningRes;
+      chaos += s.chaosRes;
+    }
+    return { fire, cold, lightning, chaos };
+  }, [allEquipment]);
+
+  const totalEleRes = stats.fireRes + stats.coldRes + stats.lightningRes;
+  const hasResists = totalEleRes > 0 || stats.chaosRes > 0;
+  const hasDefenses = stats.life > 0 || stats.mana > 0 || stats.energyShield > 0;
+  const hasAttributes = stats.strength > 0 || stats.dexterity > 0 || stats.intelligence > 0;
+
+  if (!hasResists && !hasDefenses && !hasAttributes && !stats.movementSpeed && !stats.attackSpeed) {
+    return null;
+  }
+
+  // Build summary parts
+  const parts: Array<{ label: string; value: string; color: string }> = [];
+
+  if (stats.life > 0) parts.push({ label: "Life", value: `+${stats.life}`, color: "#c44" });
+  if (stats.mana > 0) parts.push({ label: "Mana", value: `+${stats.mana}`, color: "#66b" });
+  if (stats.energyShield > 0) parts.push({ label: "ES", value: `+${stats.energyShield}`, color: "#6bf" });
+
+  // Item-level resist breakdown
+  const resLines: string[] = [];
+  if (stats.fireRes > 0) resLines.push(`Fire ${stats.fireRes}%`);
+  if (stats.coldRes > 0) resLines.push(`Cold ${stats.coldRes}%`);
+  if (stats.lightningRes > 0) resLines.push(`Ltng ${stats.lightningRes}%`);
+  if (stats.chaosRes > 0) resLines.push(`Chaos ${stats.chaosRes}%`);
+
+  if (hasResists) {
+    parts.push({
+      label: "Resists",
+      value: `${totalEleRes + stats.chaosRes}% total`,
+      color: Colors.text,
+    });
+  }
+
+  if (stats.movementSpeed > 0) parts.push({ label: "Move", value: `${stats.movementSpeed}%`, color: Colors.cyan });
+  if (stats.attackSpeed > 0) parts.push({ label: "AtkSpd", value: `${stats.attackSpeed}%`, color: Colors.cyan });
+
+  if (hasAttributes) {
+    const attrParts: string[] = [];
+    if (stats.strength > 0) attrParts.push(`Str ${stats.strength}`);
+    if (stats.dexterity > 0) attrParts.push(`Dex ${stats.dexterity}`);
+    if (stats.intelligence > 0) attrParts.push(`Int ${stats.intelligence}`);
+    parts.push({ label: "Attr", value: attrParts.join(", "), color: Colors.textSecondary });
+  }
+
+  // Character-level resist warnings — only flag if gear total is under 75%
+  const RES_CAP = 75;
+  const charGaps: string[] = [];
+  if (charResists.fire < RES_CAP) charGaps.push(`Fire ${charResists.fire}%`);
+  if (charResists.cold < RES_CAP) charGaps.push(`Cold ${charResists.cold}%`);
+  if (charResists.lightning < RES_CAP) charGaps.push(`Lightning ${charResists.lightning}%`);
+
+  // Character resist summary line
+  const charResLine = `Gear resists: Fire ${charResists.fire}% · Cold ${charResists.cold}% · Ltng ${charResists.lightning}%`;
+
+  return (
+    <View style={styles.statSummary}>
+      <View style={styles.statSummaryDivider} />
+      <Text style={styles.statSummaryLabel}>STAT CHECK</Text>
+      <View style={styles.statSummaryGrid}>
+        {parts.map((p) => (
+          <View key={p.label} style={styles.statSummaryItem}>
+            <Text style={styles.statSummaryItemLabel}>{p.label}</Text>
+            <Text style={[styles.statSummaryItemValue, { color: p.color }]}>{p.value}</Text>
+          </View>
+        ))}
+      </View>
+      {resLines.length > 0 && (
+        <Text style={styles.statSummaryDetail}>This item: {resLines.join(" · ")}</Text>
+      )}
+      {allEquipment.length > 0 && (
+        <Text style={styles.statSummaryDetail}>{charResLine}</Text>
+      )}
+      {charGaps.length > 0 && (
+        <Text style={styles.statSummaryGap}>
+          Under 75% from gear: {charGaps.join(", ")}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+/**
+ * Match user's item against a popular item entry.
+ * - Uniques: match by exact name
+ * - Rares: match by typeLine (base type), OR by "Rare [SlotType]" aggregate
+ *   (popular list aggregates all rares as "Rare Belt", "Rare Helmet", etc.)
+ */
+function matchesCurrentItem(
+  popularName: string,
+  currentItem: CharacterItem | null
+): boolean {
+  if (!currentItem) return false;
+  const lcPopular = popularName.toLowerCase();
+  // Exact name match (uniques)
+  if (currentItem.name && currentItem.name.toLowerCase() === lcPopular) return true;
+  // Base type match (specific rare base types in list)
+  if (currentItem.typeLine && currentItem.typeLine.toLowerCase() === lcPopular) return true;
+  // "Rare [SlotType]" aggregate match — the popular list groups all rares under
+  // generic names like "Rare Belt". Match if user's item is a crafted rare.
+  if (lcPopular.startsWith("rare ") && isLikelyRare(currentItem)) return true;
+  return false;
+}
+
+function isLikelyRare(item: CharacterItem): boolean {
+  // A rare item has explicit or crafted mods (unlike normal/magic which have few or none)
+  return (item.explicitMods?.length ?? 0) > 0 || (item.craftedMods?.length ?? 0) > 0;
+}
+
+function MetaInsight({
+  items,
+  currentItem,
+}: {
+  items: PopularItem[];
+  currentItem: CharacterItem | null;
+}) {
+  const lines = useMemo(() => {
+    if (items.length === 0) return [];
+    const result: Array<{ text: string; color: string }> = [];
+
+    // Find user's item match (by name for uniques, by typeLine for rares)
+    let matchIdx = -1;
+    if (currentItem) {
+      matchIdx = items.findIndex((i) => matchesCurrentItem(i.name, currentItem));
+    }
+
+    // Line 1: User's item status
+    if (currentItem && matchIdx >= 0) {
+      const match = items[matchIdx];
+      const isRareAgg = match.name.toLowerCase().startsWith("rare ");
+      if (isRareAgg) {
+        result.push({
+          text: `${match.percentage.toFixed(1)}% of builds use a crafted rare here — you're in the meta`,
+          color: Colors.text,
+        });
+      } else {
+        result.push({
+          text: `Your ${currentItem.name || currentItem.typeLine} is #${matchIdx + 1} — ${match.percentage.toFixed(1)}% of builds`,
+          color: Colors.text,
+        });
+      }
+    } else if (currentItem) {
+      const label = currentItem.typeLine || currentItem.name || "item";
+      result.push({
+        text: `Your ${label} is not in the top ${items.length} for this slot`,
+        color: Colors.textSecondary,
+      });
+    }
+
+    // Line 2: Top alternative — show the best item the user doesn't have
+    const topPick = items[0];
+    const topIsUsers = matchIdx === 0;
+    if (topIsUsers) {
+      // User's item matches #1 — find top unique alternative if they have a rare,
+      // or just the runner-up otherwise
+      const isUserRare = isLikelyRare(currentItem!);
+      const alt = isUserRare
+        ? items.find((i) => i.rarity === "unique") // top unique upgrade
+        : items[1]; // just runner-up
+      if (alt) {
+        const altIdx = items.indexOf(alt) + 1;
+        let altText = isUserRare
+          ? `Top unique: ${alt.name} — ${alt.percentage.toFixed(1)}%`
+          : `Runner-up: ${alt.name} — ${alt.percentage.toFixed(1)}%`;
+        if (alt.priceText) altText += ` · ${alt.priceText}`;
+        result.push({ text: altText, color: Colors.textSecondary });
+      }
+    } else if (matchIdx > 0) {
+      // User's item is in the list but not #1 — show what #1 is
+      let topText = `#1 pick: ${topPick.name} — ${topPick.percentage.toFixed(1)}%`;
+      if (topPick.priceText) topText += ` · ${topPick.priceText}`;
+      result.push({ text: topText, color: Colors.text });
+    } else {
+      // User's item isn't in the list at all
+      let topText = `#1 pick: ${topPick.name} — ${topPick.percentage.toFixed(1)}%`;
+      if (topPick.priceText) topText += ` · ${topPick.priceText}`;
+      result.push({ text: topText, color: Colors.text });
+    }
+
+    // Line 3: Unique vs rare composition (only if rarity data is meaningful)
+    let uniqueCount = 0;
+    let rareCount = 0;
+    for (const item of items) {
+      if (item.rarity === "unique") uniqueCount++;
+      else if (item.rarity === "rare") rareCount++;
+    }
+    if (uniqueCount > 0 && rareCount > 0) {
+      result.push({
+        text: `Slot meta: ${uniqueCount} unique, ${rareCount} rare in top ${items.length}`,
+        color: Colors.textMuted,
+      });
+    } else if (uniqueCount > 0) {
+      result.push({
+        text: `Slot is dominated by uniques (${uniqueCount}/${items.length})`,
+        color: Colors.textMuted,
+      });
+    } else if (rareCount > 0) {
+      result.push({
+        text: `Slot favors crafted rares (${rareCount}/${items.length})`,
+        color: Colors.textMuted,
+      });
+    }
+
+    return result;
+  }, [items, currentItem]);
+
+  if (lines.length === 0) return null;
+
+  return (
+    <Panel style={styles.metaInsightPanel}>
+      <Text style={styles.metaInsightLabel}>META INSIGHT</Text>
+      {lines.map((line, i) => (
+        <Text key={i} style={[styles.metaInsightText, { color: line.color }]}>
+          {line.text}
+        </Text>
+      ))}
+    </Panel>
+  );
+}
+
+function PopularItemsView({
+  result,
+  loading,
+  onBack,
+  allEquipment,
+}: {
+  result: PopularItemsResult | null;
+  loading: boolean;
+  onBack: () => void;
+  allEquipment: CharacterItem[];
+}) {
+  const maxPct = useMemo(() => {
+    if (!result?.items.length) return 100;
+    return Math.max(...result.items.map((i) => i.percentage));
+  }, [result]);
+
+  const currentItemName = result?.currentItem?.name || result?.currentItem?.typeLine || null;
+
+  return (
+    <ScrollView style={styles.subView} contentContainerStyle={styles.subViewContent}>
+      <View style={styles.subHeader}>
+        <Pressable onPress={onBack} hitSlop={8}>
+          <Text style={styles.backButton}>← Back</Text>
         </Pressable>
+        <Text style={styles.subTitle} numberOfLines={1}>
+          Popular {result?.slot ?? "Items"}
+        </Text>
+      </View>
+
+      {/* Current item highlight with mods */}
+      {result?.currentItem && (
+        <Panel style={styles.currentItemPanel}>
+          <Text style={styles.currentItemLabel}>YOUR ITEM</Text>
+          <Text style={styles.currentItemName}>
+            {result.currentItem.name || result.currentItem.typeLine}
+          </Text>
+          <CurrentItemMods item={result.currentItem} />
+          <ItemStatSummary item={result.currentItem} allEquipment={allEquipment} />
+        </Panel>
+      )}
+
+      {/* Meta insight panel */}
+      {!loading && result && result.items.length > 0 && (
+        <MetaInsight items={result.items} currentItem={result.currentItem} />
+      )}
+
+      {loading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={Colors.gold} />
+          <Text style={styles.loadingText}>Loading popular items...</Text>
+        </View>
+      ) : !result || result.items.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={styles.emptyText}>No popular item data available</Text>
+          <Text style={[styles.emptyText, { marginTop: 4, fontSize: 12 }]}>
+            Try a different character class or skill
+          </Text>
+        </View>
+      ) : (
+        result.items.map((item, idx) => {
+          const isCurrentItem = matchesCurrentItem(item.name, result.currentItem);
+
+          return (
+            <View
+              key={`${item.name}-${idx}`}
+              style={[
+                styles.popularItemRow,
+                isCurrentItem && styles.popularItemHighlight,
+              ]}
+            >
+              <Text style={styles.popularItemRank}>{idx + 1}.</Text>
+              <View style={styles.popularItemInfo}>
+                <View style={styles.popularItemNameRow}>
+                  <Text
+                    style={[
+                      styles.popularItemName,
+                      item.rarity === "unique" && { color: "#af6025" },
+                      item.rarity === "rare" && { color: "#ff7" },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.name}
+                  </Text>
+                  {isCurrentItem && (
+                    <Text style={styles.yoursLabel}>(yours)</Text>
+                  )}
+                </View>
+                {item.priceText && (
+                  <Text style={styles.popularItemPrice}>{item.priceText}</Text>
+                )}
+                <View style={styles.popularBarTrack}>
+                  <View
+                    style={[
+                      styles.popularBarFill,
+                      {
+                        width: `${(item.percentage / maxPct) * 100}%`,
+                        backgroundColor: isCurrentItem ? Colors.gold : Colors.textSecondary,
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+              <Text style={styles.popularItemPct}>
+                {item.percentage.toFixed(1)}%
+              </Text>
+            </View>
+          );
+        })
       )}
     </ScrollView>
   );
@@ -613,6 +1132,21 @@ export default function BuildsScreen() {
     );
   }
 
+  // ─── Popular Items ─────────────────────────────────────────────
+
+  if (builds.viewMode === "popularItems") {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <PopularItemsView
+          result={builds.popularItemsResult}
+          loading={builds.popularItemsLoading}
+          onBack={builds.goBack}
+          allEquipment={builds.characterData?.equipment ?? []}
+        />
+      </SafeAreaView>
+    );
+  }
+
   // ─── Character Profile ────────────────────────────────────────
 
   if (builds.viewMode === "characterResult" && builds.characterData) {
@@ -623,6 +1157,7 @@ export default function BuildsScreen() {
           decodedBuild={builds.decodedBuild}
           decoding={builds.decoding}
           onBack={builds.goBack}
+          onShowPopular={builds.showPopularItemsForSlot}
         />
       </SafeAreaView>
     );
@@ -1125,8 +1660,13 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 4,
   },
-  pobButton: {
+  pobButtonRow: {
+    flexDirection: "row",
+    gap: 10,
     marginTop: 20,
+  },
+  pobButton: {
+    flex: 1,
     backgroundColor: "rgba(196, 164, 86, 0.15)",
     borderWidth: 1,
     borderColor: Colors.gold,
@@ -1138,6 +1678,166 @@ const styles = StyleSheet.create({
     color: Colors.gold,
     fontSize: 14,
     fontWeight: "700",
+  },
+
+  // Popular items link in expanded item
+  popularLink: {
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  popularLinkText: {
+    color: Colors.gold,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
+  // Popular Items View
+  currentItemPanel: {
+    padding: 12,
+    marginBottom: 12,
+  },
+  currentItemLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  currentItemName: {
+    color: Colors.gold,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  currentItemMods: {
+    marginTop: 8,
+  },
+  statSummary: {
+    marginTop: 10,
+  },
+  statSummaryDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginBottom: 8,
+  },
+  statSummaryLabel: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  statSummaryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+  },
+  statSummaryItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    gap: 4,
+  },
+  statSummaryItemLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  statSummaryItemValue: {
+    fontSize: 11,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  statSummaryDetail: {
+    color: Colors.textSecondary,
+    fontSize: 10,
+    marginTop: 4,
+  },
+  statSummaryGap: {
+    color: "#a83232",
+    fontSize: 10,
+    fontWeight: "600",
+    marginTop: 3,
+  },
+  metaInsightPanel: {
+    padding: 12,
+    marginBottom: 12,
+  },
+  metaInsightLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  metaInsightText: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  popularItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  popularItemHighlight: {
+    backgroundColor: "rgba(196, 164, 86, 0.1)",
+    borderRadius: 6,
+  },
+  popularItemRank: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: "700",
+    width: 28,
+    fontFamily: "monospace",
+  },
+  popularItemInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  popularItemNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+    gap: 6,
+  },
+  popularItemName: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  yoursLabel: {
+    color: Colors.gold,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  popularItemPrice: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    marginBottom: 3,
+  },
+  popularBarTrack: {
+    height: 4,
+    backgroundColor: Colors.border,
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  popularBarFill: {
+    height: "100%",
+    borderRadius: 2,
+  },
+  popularItemPct: {
+    color: Colors.gold,
+    fontSize: 13,
+    fontWeight: "700",
+    fontFamily: "monospace",
+    width: 52,
+    textAlign: "right",
   },
 
   // List

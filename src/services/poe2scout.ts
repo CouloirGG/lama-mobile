@@ -264,6 +264,64 @@ export async function fetchItems(
   return allItems;
 }
 
+// ─── Unique Prices by Slot ───────────────────────────────────────
+
+const uniquePriceCache = new Map<string, CacheEntry<Map<string, string>>>();
+
+/**
+ * Fetch unique item prices for a specific equipment slot slug.
+ * Slugs: "armour", "weapon", "accessory", "jewel", "flask"
+ * Returns Map<itemName, priceDisplayText> (e.g. "~2.5 div", "~150c")
+ */
+export async function fetchUniquePricesForSlot(
+  slug: string
+): Promise<Map<string, string>> {
+  const cacheKey = `unique-prices:${slug}`;
+  const cached = uniquePriceCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
+
+  const prices = new Map<string, string>();
+
+  try {
+    const leagues = await fetchLeagues();
+    const league = leagues[0];
+    if (!league || league.divinePrice <= 0) return prices;
+
+    const res = await fetch(
+      `${BASE_URL}/items/unique/${slug}?league=${encodeURIComponent(league.value)}`,
+      { headers: { "User-Agent": "LAMA-Mobile/1.0" } }
+    );
+    if (!res.ok) return prices;
+
+    const data = await res.json();
+    const items: unknown[] = Array.isArray(data) ? data : data.items ?? [];
+
+    for (const raw of items) {
+      const item = raw as Record<string, unknown>;
+      const name = (item.name as string) ?? "";
+      const rawPrice = (item.currentPrice as number) ?? 0;
+      if (!name || !rawPrice) continue;
+
+      const divineValue = rawPrice / league.divinePrice;
+      let display: string;
+      if (divineValue >= 0.85) {
+        display = `~${divineValue >= 10 ? divineValue.toFixed(0) : divineValue.toFixed(1)} div`;
+      } else if (rawPrice >= 1) {
+        display = `~${Math.round(rawPrice)}c`;
+      } else {
+        display = "< 1c";
+      }
+      prices.set(name, display);
+    }
+
+    uniquePriceCache.set(cacheKey, { data: prices, timestamp: Date.now() });
+  } catch (err) {
+    console.warn(`poe2scout: fetchUniquePricesForSlot(${slug}) failed:`, err);
+  }
+
+  return prices;
+}
+
 // ─── Search ─────────────────────────────────────────────────────
 
 export function searchItems(query: string): PricedItem[] {

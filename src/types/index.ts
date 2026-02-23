@@ -283,6 +283,22 @@ export interface DecodedBuild {
   keystones: string[];
 }
 
+// ─── Popular Items (poe.ninja builds search) ────────────────────
+
+export interface PopularItem {
+  name: string;
+  count: number;
+  percentage: number;
+  rarity?: string; // "normal" | "magic" | "rare" | "unique"
+  priceText?: string; // e.g. "~2.5 div" or "~150 chaos"
+}
+
+export interface PopularItemsResult {
+  slot: string;
+  items: PopularItem[];
+  currentItem: CharacterItem | null;
+}
+
 // ─── WebSocket Messages (from server.py /ws) ────────────────────
 export type WSMessage =
   | { type: "init"; settings: Record<string, unknown>; log: LogEntry[] }
