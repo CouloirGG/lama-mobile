@@ -117,6 +117,12 @@ export interface PriceAlert {
   last_triggered?: number;
 }
 
+export interface WatchedItem {
+  name: string;       // exact item name, lookup key
+  category: string;   // CategoryId for re-fetching prices
+  addedAt: number;    // timestamp
+}
+
 export interface PairingConfig {
   host: string;
   port: number;
