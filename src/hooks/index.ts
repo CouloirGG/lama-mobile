@@ -3,3 +3,4 @@ export { useMarketData } from "./useMarketData";
 export { useTrendsData } from "./useTrendsData";
 export { useWatchlist } from "./useWatchlist";
 export { useTradeSearch } from "./useTradeSearch";
+export { useBuildsData } from "./useBuildsData";

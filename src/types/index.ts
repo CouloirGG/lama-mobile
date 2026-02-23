@@ -177,7 +177,111 @@ export interface PairingConfig {
 
 export type AppMode = "standalone" | "paired";
 
-export type TabId = "market" | "trends" | "watch" | "lama";
+export type TabId = "market" | "trends" | "watch" | "builds" | "lama";
+
+// ─── Builds (poe.ninja builds API) ──────────────────────────────
+
+export interface BuildSnapshotInfo {
+  version: string;
+  snapshotName: string;
+}
+
+export interface ClassStatistic {
+  name: string;
+  percentage: number;
+  count: number;
+  isAscendancy: boolean;
+  baseClass?: string;
+}
+
+export interface LeagueBuildSummary {
+  leagueName: string;
+  totalCharacters: number;
+  classes: ClassStatistic[];
+}
+
+export interface PopularSkill {
+  name: string;
+  usageCount: number;
+  usagePercentage: number;
+}
+
+export interface PopularAnoint {
+  name: string;
+  percentage: number;
+}
+
+export interface CharacterItem {
+  name: string;
+  typeLine: string;
+  slot: string;
+  rarity?: string;
+  sockets?: string[];
+  implicitMods?: string[];
+  explicitMods?: string[];
+  craftedMods?: string[];
+  enchantMods?: string[];
+  fracturedMods?: string[];
+  desecratedMods?: string[];
+  runeMods?: string[];
+}
+
+export interface CharacterSkillGem {
+  name: string;
+  level: number;
+  quality?: number;
+}
+
+export interface SkillGroupDps {
+  name: string;
+  dps: number;
+  dotDps: number;
+  damage: number; // per-hit damage (damage[0] from API, what poe.ninja displays)
+}
+
+export interface CharacterSkillGroup {
+  gems: string[];
+  dps: SkillGroupDps[];
+}
+
+export interface CharacterData {
+  account: string;
+  name: string;
+  class: string;
+  ascendancy: string;
+  level: number;
+  equipment: CharacterItem[];
+  skills: CharacterSkillGem[];
+  skillGroups: CharacterSkillGroup[];
+  keystones: string[];
+  pobCode: string | null;
+}
+
+// ─── Decoded POB Build ───────────────────────────────────────────
+
+export interface DecodedWeapon {
+  name: string;
+  baseName: string;
+  physicalDps: number;
+  elementalDps: number;
+  totalDps: number;
+  attackSpeed: number;
+  critChance: number;
+  physRange: [number, number];
+  eleRange: [number, number];
+}
+
+export interface DecodedMainSkill {
+  name: string;
+  supports: string[];
+}
+
+export interface DecodedBuild {
+  mainSkill: DecodedMainSkill | null;
+  weapon: DecodedWeapon | null;
+  offhand: DecodedWeapon | null;
+  keystones: string[];
+}
 
 // ─── WebSocket Messages (from server.py /ws) ────────────────────
 export type WSMessage =

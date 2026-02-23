@@ -14,7 +14,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { View, Text, StyleSheet } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import { MarketScreen, TrendsScreen, WatchScreen, LAMAScreen } from "./src/screens";
+import { MarketScreen, TrendsScreen, WatchScreen, BuildsScreen, LAMAScreen } from "./src/screens";
 import { Colors } from "./src/theme";
 
 const Tab = createBottomTabNavigator();
@@ -24,6 +24,7 @@ const TAB_ICONS: Record<string, string> = {
   Market: "📊",
   Trends: "📈",
   Watch: "👁",
+  Builds: "⚒",
   LAMA: "🦙",
 };
 
@@ -94,6 +95,7 @@ export default function App() {
         <Tab.Screen name="Market" component={MarketScreen} />
         <Tab.Screen name="Trends" component={TrendsScreen} />
         <Tab.Screen name="Watch" component={WatchScreen} />
+        <Tab.Screen name="Builds" component={BuildsScreen} />
         <Tab.Screen name="LAMA" component={LAMAScreen} />
       </Tab.Navigator>
     </NavigationContainer>
