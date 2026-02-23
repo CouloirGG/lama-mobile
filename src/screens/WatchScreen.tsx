@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -8,13 +8,15 @@ import {
   ActivityIndicator,
   StyleSheet,
   RefreshControl,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, tierColors } from "../theme";
 import { KPIBar, Panel } from "../components";
 import { useSettings } from "../hooks/useSettings";
-import { useWatchlist } from "../hooks/useWatchlist";
-import type { PricedItem } from "../types";
+import { useWatchlist, FILTER_CATEGORIES } from "../hooks/useWatchlist";
+import { useTradeSearch } from "../hooks/useTradeSearch";
+import type { PricedItem, TradeWatchEntry, TradeSnapshot } from "../types";
 import { formatItemPrice } from "../utils/format";
 
 // ─── Watched Item Row ────────────────────────────────────────────
@@ -64,6 +66,59 @@ function WatchedItemRow({
   );
 }
 
+// ─── Trade Watch Row ─────────────────────────────────────────────
+
+function TradeWatchRow({
+  entry,
+  onRemove,
+}: {
+  entry: TradeWatchEntry;
+  onRemove: () => void;
+}) {
+  const snap = entry.lastResult;
+  const timeAgo = snap ? formatTimeAgo(snap.checkedAt) : null;
+
+  return (
+    <Panel style={styles.itemPanel}>
+      <View style={styles.itemRow}>
+        <View style={styles.itemLeft}>
+          <Text style={[styles.itemName, { color: Colors.gold }]} numberOfLines={1}>
+            {entry.label}
+          </Text>
+          <Text style={styles.itemSub}>
+            TRADE {snap ? `· ${snap.totalListings} LISTINGS` : "· NOT CHECKED"}
+            {timeAgo ? ` · ${timeAgo}` : ""}
+          </Text>
+        </View>
+        <View style={styles.itemRight}>
+          {snap && snap.lowestPrice > 0 ? (
+            <>
+              <Text style={styles.itemPrice}>{snap.lowestDisplay}</Text>
+            </>
+          ) : (
+            <Text style={styles.itemPrice}>--</Text>
+          )}
+          <Pressable
+            style={styles.removeButton}
+            onPress={onRemove}
+            hitSlop={8}
+          >
+            <Text style={styles.removeButtonText}>×</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Panel>
+  );
+}
+
+function formatTimeAgo(timestamp: number): string {
+  const mins = Math.floor((Date.now() - timestamp) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ago`;
+}
+
 // ─── Search Result Row ───────────────────────────────────────────
 
 function SearchResultRow({
@@ -94,6 +149,7 @@ function SearchResultRow({
         </Text>
         <Text style={styles.itemSub}>
           {item.tier.toUpperCase()} · {item.category}
+          {item.source === "poe.ninja" ? " · ninja" : ""}
         </Text>
       </View>
       <View style={styles.itemRight}>
@@ -119,6 +175,220 @@ function SearchResultRow({
   );
 }
 
+// ─── Category Filter Pills ──────────────────────────────────────
+
+function CategoryPills({
+  activeFilter,
+  onSelect,
+}: {
+  activeFilter: string | null;
+  onSelect: (f: string | null) => void;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.pillsContainer}
+      contentContainerStyle={styles.pillsContent}
+    >
+      {FILTER_CATEGORIES.map((cat) => {
+        const isActive = cat === "All" ? activeFilter === null : activeFilter === cat;
+        return (
+          <Pressable
+            key={cat}
+            style={[styles.pill, isActive && styles.pillActive]}
+            onPress={() => onSelect(cat === "All" ? null : cat)}
+          >
+            <Text style={[styles.pillText, isActive && styles.pillTextActive]}>
+              {cat}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// ─── Trade Browse Mode ──────────────────────────────────────────
+
+function TradeBrowse({
+  league,
+  onBack,
+  onWatch,
+}: {
+  league: string;
+  onBack: () => void;
+  onWatch: (params: { baseType: string; category?: string; ilvlMin?: number; ilvlMax?: number }, label: string) => void;
+}) {
+  const trade = useTradeSearch(league);
+
+  useEffect(() => {
+    trade.loadCategories();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Step 1: Category list
+  if (trade.step === 1) {
+    return (
+      <View style={styles.tradeContainer}>
+        <View style={styles.tradeHeader}>
+          <Pressable onPress={onBack} hitSlop={8}>
+            <Text style={styles.backButton}>← Back</Text>
+          </Pressable>
+          <Text style={styles.tradeTitle}>Trade Browse</Text>
+        </View>
+
+        {trade.categoriesLoading ? (
+          <View style={styles.centered}>
+            <ActivityIndicator size="large" color={Colors.gold} />
+            <Text style={styles.loadingText}>Loading categories...</Text>
+          </View>
+        ) : trade.categoriesError ? (
+          <View style={styles.centered}>
+            <Text style={styles.errorText}>{trade.categoriesError}</Text>
+            <Pressable style={styles.retryButton} onPress={trade.loadCategories}>
+              <Text style={styles.retryText}>Retry</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <FlatList
+            data={trade.categories}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <Pressable
+                style={styles.tradeRow}
+                onPress={() => trade.selectCategory(item)}
+              >
+                <Text style={styles.tradeRowText}>{item.label}</Text>
+                <Text style={styles.tradeRowCount}>{item.entries.length}</Text>
+              </Pressable>
+            )}
+            contentContainerStyle={styles.listContent}
+          />
+        )}
+      </View>
+    );
+  }
+
+  // Step 2: Base type list
+  if (trade.step === 2 && trade.selectedCategory) {
+    return (
+      <View style={styles.tradeContainer}>
+        <View style={styles.tradeHeader}>
+          <Pressable onPress={trade.reset} hitSlop={8}>
+            <Text style={styles.backButton}>← Categories</Text>
+          </Pressable>
+          <Text style={styles.tradeTitle}>{trade.selectedCategory.label}</Text>
+        </View>
+
+        <FlatList
+          data={trade.selectedCategory.entries}
+          keyExtractor={(item, idx) => `${item.name}-${idx}`}
+          renderItem={({ item }) => (
+            <Pressable
+              style={styles.tradeRow}
+              onPress={() => trade.selectBaseType(item)}
+            >
+              <Text style={styles.tradeRowText}>{item.name}</Text>
+            </Pressable>
+          )}
+          contentContainerStyle={styles.listContent}
+        />
+      </View>
+    );
+  }
+
+  // Step 3: Config + search, Step 4: Results
+  return (
+    <View style={styles.tradeContainer}>
+      <View style={styles.tradeHeader}>
+        <Pressable
+          onPress={() => {
+            if (trade.result) {
+              // Go back to step 3 from step 4 by clearing result
+              trade.search; // no-op, just go back by selecting base type again
+              trade.selectBaseType(trade.selectedBaseType!);
+            } else {
+              trade.selectCategory(trade.selectedCategory!);
+            }
+          }}
+          hitSlop={8}
+        >
+          <Text style={styles.backButton}>
+            ← {trade.result ? trade.selectedBaseType?.name : trade.selectedCategory?.label}
+          </Text>
+        </Pressable>
+        <Text style={styles.tradeTitle}>
+          {trade.selectedBaseType?.name ?? ""}
+        </Text>
+      </View>
+
+      <View style={styles.tradeForm}>
+        <Text style={styles.tradeLabel}>Item Level</Text>
+        <View style={styles.ilvlRow}>
+          <TextInput
+            style={styles.ilvlInput}
+            placeholder="Min"
+            placeholderTextColor={Colors.textMuted}
+            value={trade.ilvlMin}
+            onChangeText={trade.setIlvlMin}
+            keyboardType="number-pad"
+          />
+          <Text style={styles.ilvlDash}>–</Text>
+          <TextInput
+            style={styles.ilvlInput}
+            placeholder="Max"
+            placeholderTextColor={Colors.textMuted}
+            value={trade.ilvlMax}
+            onChangeText={trade.setIlvlMax}
+            keyboardType="number-pad"
+          />
+        </View>
+
+        <Pressable
+          style={[styles.searchButton, trade.searching && styles.searchButtonDisabled]}
+          onPress={trade.search}
+          disabled={trade.searching}
+        >
+          {trade.searching ? (
+            <ActivityIndicator size="small" color={Colors.bg} />
+          ) : (
+            <Text style={styles.searchButtonText}>Search Trade</Text>
+          )}
+        </Pressable>
+
+        {trade.searchError && (
+          <Text style={styles.tradeError}>{trade.searchError}</Text>
+        )}
+      </View>
+
+      {/* Step 4: Result display */}
+      {trade.result && (
+        <Panel style={styles.tradeResultPanel}>
+          <Text style={styles.tradeResultLabel}>Lowest Price</Text>
+          <Text style={styles.tradeResultPrice}>
+            {trade.result.lowestDisplay}
+          </Text>
+          <Text style={styles.tradeResultListings}>
+            {trade.result.totalListings} total listing{trade.result.totalListings !== 1 ? "s" : ""}
+          </Text>
+
+          <Pressable
+            style={styles.watchThisButton}
+            onPress={() => {
+              const params = trade.getSearchParams();
+              if (params) {
+                onWatch(params, trade.getLabel());
+              }
+            }}
+          >
+            <Text style={styles.watchThisText}>Watch This</Text>
+          </Pressable>
+        </Panel>
+      )}
+    </View>
+  );
+}
+
 // ─── Watch Screen ────────────────────────────────────────────────
 
 export default function WatchScreen() {
@@ -134,8 +404,15 @@ export default function WatchScreen() {
     loading,
     error,
     cacheReady,
+    backgroundLoading,
+    mode,
+    setMode,
+    activeFilter,
+    setActiveFilter,
     addItem,
     removeItem,
+    addTradeQuery,
+    removeTradeQuery,
     isWatched,
     refresh,
   } = useWatchlist(league);
@@ -182,14 +459,38 @@ export default function WatchScreen() {
     []
   );
 
+  // ─── Trade mode ───────────────────────────────────────────────
+
+  if (mode === "trade") {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <TradeBrowse
+          league={league}
+          onBack={() => setMode("watchlist")}
+          onWatch={(params, label) => {
+            addTradeQuery(params, label);
+          }}
+        />
+      </SafeAreaView>
+    );
+  }
+
   // ─── Render ───────────────────────────────────────────────────
 
+  // Count items by type for section header
+  const itemCount = watchedItems.filter((w) => w.type === "item").length;
+  const tradeCount = watchedItems.filter((w) => w.type === "trade").length;
+  const totalCount = itemCount + tradeCount;
+
+  // Trade watch entries for rendering in watchlist
+  const tradeEntries = watchedItems.filter((w): w is TradeWatchEntry => w.type === "trade");
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       {/* KPI Bar — hidden during search to maximize space */}
       {!isSearching && <KPIBar rates={rates} />}
 
-      {/* Search Bar */}
+      {/* Search Bar + Trade Browse Button */}
       <View style={styles.searchContainer}>
         <Text style={styles.searchIcon}>&#x1F50D;</Text>
         <TextInput
@@ -201,9 +502,13 @@ export default function WatchScreen() {
           autoCorrect={false}
           autoCapitalize="none"
         />
-        {isSearching && (
+        {isSearching ? (
           <Pressable onPress={() => setSearchQuery("")} hitSlop={8}>
             <Text style={styles.clearButton}>×</Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={() => setMode("trade")} hitSlop={8}>
+            <Text style={styles.tradeIcon}>&#x2696;</Text>
           </Pressable>
         )}
       </View>
@@ -217,37 +522,46 @@ export default function WatchScreen() {
           </Pressable>
         </View>
       ) : isSearching ? (
-        /* ─── Search Mode ─── */
-        <FlatList
-          data={searchResults}
-          renderItem={renderSearchResult}
-          keyExtractor={searchKeyExtractor}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={
-            searchResults.length === 0 ? styles.emptyList : styles.listContent
-          }
-          ListEmptyComponent={
-            !cacheReady ? (
-              <View style={styles.centered}>
-                <ActivityIndicator size="large" color={Colors.gold} />
-                <Text style={styles.loadingText}>Loading item data...</Text>
-              </View>
-            ) : searchQuery.length < 2 ? null : (
-              <View style={styles.centered}>
-                <Text style={styles.emptyText}>
-                  No results for "{searchQuery}"
-                </Text>
-              </View>
-            )
-          }
-        />
+        /* ─── Mode B: Item Search ─── */
+        <>
+          <CategoryPills activeFilter={activeFilter} onSelect={setActiveFilter} />
+
+          <FlatList
+            data={searchResults}
+            renderItem={renderSearchResult}
+            keyExtractor={searchKeyExtractor}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={
+              searchResults.length === 0 ? styles.emptyList : styles.listContent
+            }
+            ListFooterComponent={
+              backgroundLoading ? (
+                <Text style={styles.bgLoadingText}>Loading more items...</Text>
+              ) : null
+            }
+            ListEmptyComponent={
+              !cacheReady ? (
+                <View style={styles.centered}>
+                  <ActivityIndicator size="large" color={Colors.gold} />
+                  <Text style={styles.loadingText}>Loading item data...</Text>
+                </View>
+              ) : searchQuery.length < 2 ? null : (
+                <View style={styles.centered}>
+                  <Text style={styles.emptyText}>
+                    No results for "{searchQuery}"
+                  </Text>
+                </View>
+              )
+            }
+          />
+        </>
       ) : (
-        /* ─── Watchlist Mode ─── */
+        /* ─── Mode A: Watchlist ─── */
         <>
           {/* Section Header */}
           <Text style={styles.sectionHeader}>
-            WATCHING · {watchedItems.length} ITEM
-            {watchedItems.length !== 1 ? "S" : ""}
+            WATCHING · {totalCount} ITEM
+            {totalCount !== 1 ? "S" : ""}
           </Text>
 
           <FlatList
@@ -255,7 +569,9 @@ export default function WatchScreen() {
             renderItem={renderWatchedItem}
             keyExtractor={watchedKeyExtractor}
             contentContainerStyle={
-              pricedItems.length === 0 ? styles.emptyList : styles.listContent
+              pricedItems.length === 0 && tradeEntries.length === 0
+                ? styles.emptyList
+                : styles.listContent
             }
             refreshControl={
               <RefreshControl
@@ -266,7 +582,21 @@ export default function WatchScreen() {
                 progressBackgroundColor={Colors.card}
               />
             }
+            ListHeaderComponent={
+              tradeEntries.length > 0 ? (
+                <View style={styles.tradeWatchSection}>
+                  {tradeEntries.map((entry) => (
+                    <TradeWatchRow
+                      key={entry.id}
+                      entry={entry}
+                      onRemove={() => removeTradeQuery(entry.id)}
+                    />
+                  ))}
+                </View>
+              ) : null
+            }
             ListEmptyComponent={
+              tradeEntries.length > 0 ? null :
               loading ? (
                 <View style={styles.centered}>
                   <ActivityIndicator size="large" color={Colors.gold} />
@@ -325,6 +655,41 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     paddingHorizontal: 4,
+  },
+  tradeIcon: {
+    fontSize: 18,
+    color: Colors.textSecondary,
+    paddingHorizontal: 4,
+  },
+
+  // Category Pills
+  pillsContainer: {
+    maxHeight: 36,
+    marginBottom: 8,
+  },
+  pillsContent: {
+    gap: 6,
+    paddingRight: 12,
+  },
+  pill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  pillActive: {
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+    borderColor: Colors.gold,
+  },
+  pillText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    fontWeight: "600",
+  },
+  pillTextActive: {
+    color: Colors.gold,
   },
 
   // Section Header
@@ -434,6 +799,150 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     lineHeight: 20,
+  },
+
+  // Background loading indicator
+  bgLoadingText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    textAlign: "center",
+    paddingVertical: 12,
+    fontStyle: "italic",
+  },
+
+  // Trade watch section in watchlist
+  tradeWatchSection: {
+    gap: 6,
+    marginBottom: 6,
+  },
+
+  // Trade Browse Mode
+  tradeContainer: {
+    flex: 1,
+  },
+  tradeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 12,
+  },
+  backButton: {
+    color: Colors.gold,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  tradeTitle: {
+    color: Colors.text,
+    fontSize: 16,
+    fontWeight: "700",
+    flex: 1,
+  },
+  tradeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  tradeRowText: {
+    color: Colors.text,
+    fontSize: 14,
+    flex: 1,
+  },
+  tradeRowCount: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontFamily: "monospace",
+  },
+  tradeForm: {
+    paddingHorizontal: 4,
+    gap: 12,
+  },
+  tradeLabel: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  ilvlRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  ilvlInput: {
+    flex: 1,
+    backgroundColor: Colors.input,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    color: Colors.text,
+    fontSize: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    textAlign: "center",
+  },
+  ilvlDash: {
+    color: Colors.textMuted,
+    fontSize: 16,
+  },
+  searchButton: {
+    backgroundColor: Colors.gold,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  searchButtonDisabled: {
+    opacity: 0.6,
+  },
+  searchButtonText: {
+    color: Colors.bg,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  tradeError: {
+    color: Colors.red,
+    fontSize: 12,
+    textAlign: "center",
+  },
+  tradeResultPanel: {
+    marginTop: 16,
+    padding: 16,
+    alignItems: "center",
+    gap: 8,
+  },
+  tradeResultLabel: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  tradeResultPrice: {
+    color: Colors.gold,
+    fontSize: 28,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  tradeResultListings: {
+    color: Colors.textMuted,
+    fontSize: 12,
+  },
+  watchThisButton: {
+    marginTop: 8,
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+    borderWidth: 1,
+    borderColor: Colors.gold,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+  },
+  watchThisText: {
+    color: Colors.gold,
+    fontSize: 14,
+    fontWeight: "700",
   },
 
   // States

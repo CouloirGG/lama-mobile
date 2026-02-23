@@ -7,11 +7,19 @@
  * API: https://poe.ninja/poe2/api/economy/exchange/current/overview
  */
 
-import type { ExchangeRates, CurrencyLine } from "../types";
+import type { ExchangeRates, CurrencyLine, PricedItem } from "../types";
+import { assignTier, formatDisplay } from "./poe2scout";
 
 const EXCHANGE_URL =
   "https://poe.ninja/poe2/api/economy/exchange/current/overview";
 const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+// Ninja item types NOT already well-covered by poe2scout
+export const NINJA_ITEM_TYPES = [
+  { type: "SoulCores",  category: "soulcores" },
+  { type: "Ritual",     category: "omens" },
+  { type: "Expedition", category: "expedition" },
+] as const;
 
 const FALLBACK_RATES: ExchangeRates = {
   divine_to_chaos: 68,
@@ -190,5 +198,68 @@ export async function fetchCurrencyLines(
       return { rates: currencyCache.rates, lines: currencyCache.lines };
     }
     return { rates: FALLBACK_RATES, lines: [] };
+  }
+}
+
+/**
+ * Fetch item lines from poe.ninja for non-currency types (SoulCores, Omens, Expedition).
+ * Converts to PricedItem[] using poe2scout's assignTier + formatDisplay for consistency.
+ */
+export async function fetchNinjaItemLines(
+  league: string,
+  ninjaType: string,
+  categoryLabel: string,
+  rates: ExchangeRates
+): Promise<PricedItem[]> {
+  try {
+    const res = await fetch(
+      `${EXCHANGE_URL}?league=${encodeURIComponent(league)}&type=${encodeURIComponent(ninjaType)}`,
+      { headers: { "User-Agent": "LAMA-Mobile/1.0" } }
+    );
+
+    if (!res.ok) {
+      console.warn(`poe.ninja ${ninjaType}: HTTP ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json();
+    const core = data.core ?? {};
+    const items = data.items ?? core.items ?? [];
+    const lines = data.lines ?? [];
+
+    // Build id→name map
+    const idToName: Record<string, string> = {};
+    for (const item of items) {
+      if (item.id && item.name) {
+        idToName[item.id] = item.name;
+      }
+    }
+
+    const result: PricedItem[] = [];
+    for (const line of lines) {
+      const name = idToName[line.id] ?? String(line.id);
+      const divineValue: number = line.primaryValue ?? 0;
+      if (!name || divineValue <= 0) continue;
+
+      const chaosValue = divineValue * rates.divine_to_chaos;
+      const exaltedValue = divineValue * rates.divine_to_exalted;
+
+      result.push({
+        name,
+        divine_value: divineValue,
+        chaos_value: chaosValue,
+        exalted_value: exaltedValue,
+        category: categoryLabel,
+        source: "poe.ninja",
+        display: formatDisplay(divineValue, rates.divine_to_chaos, rates.divine_to_exalted),
+        tier: assignTier(divineValue, rates.divine_to_chaos),
+      });
+    }
+
+    result.sort((a, b) => b.divine_value - a.divine_value);
+    return result;
+  } catch (err) {
+    console.warn(`poe.ninja ${ninjaType} fetch failed:`, err);
+    return [];
   }
 }

@@ -117,10 +117,55 @@ export interface PriceAlert {
   last_triggered?: number;
 }
 
-export interface WatchedItem {
-  name: string;       // exact item name, lookup key
-  category: string;   // CategoryId for re-fetching prices
-  addedAt: number;    // timestamp
+// ─── Watched Item (discriminated union) ──────────────────────────
+
+/** Item watch (poe2scout / poe.ninja — aggregated prices) */
+export interface ItemWatchEntry {
+  type: "item";
+  name: string;
+  category: string;
+  source: "poe2scout" | "poe.ninja";
+  addedAt: number;
+}
+
+/** Trade query watch (official trade API — live listings) */
+export interface TradeWatchEntry {
+  type: "trade";
+  id: string;
+  label: string;
+  query: TradeSearchParams;
+  lastResult: TradeSnapshot | null;
+  addedAt: number;
+}
+
+export type WatchedItem = ItemWatchEntry | TradeWatchEntry;
+
+// ─── Trade API Types ─────────────────────────────────────────────
+
+export interface TradeSearchParams {
+  baseType: string;
+  category?: string;
+  ilvlMin?: number;
+  ilvlMax?: number;
+}
+
+export interface TradeSnapshot {
+  lowestPrice: number;
+  lowestCurrency: string;
+  lowestDisplay: string;
+  totalListings: number;
+  checkedAt: number;
+}
+
+export interface TradeBaseType {
+  name: string;
+  category: string;
+}
+
+export interface TradeCategory {
+  id: string;
+  label: string;
+  entries: TradeBaseType[];
 }
 
 export interface PairingConfig {

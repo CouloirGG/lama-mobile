@@ -74,8 +74,12 @@ function getCached<T>(key: string): T | null {
   return entry.data;
 }
 
-function setCache<T>(key: string, data: T): void {
+export function setCache<T>(key: string, data: T): void {
   cache.set(key, { data, timestamp: Date.now() });
+}
+
+export function injectItems(league: string, sourceTag: string, items: PricedItem[]): void {
+  setCache(`items:${league}:${sourceTag}`, items);
 }
 
 export function clearCache(): void {
@@ -109,7 +113,7 @@ export async function fetchLeagues(): Promise<LeagueInfo[]> {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function assignTier(
+export function assignTier(
   divineValue: number,
   divineToChaos: number
 ): PricedItem["tier"] {
@@ -120,7 +124,7 @@ function assignTier(
   return "low";
 }
 
-function formatDisplay(
+export function formatDisplay(
   divineValue: number,
   divineToChaos: number,
   divineToExalted: number
