@@ -244,6 +244,45 @@ export interface CharacterSkillGroup {
   dps: SkillGroupDps[];
 }
 
+export interface DefensiveStats {
+  life: number;
+  energyShield: number;
+  mana: number;
+  spirit: number;
+  armour: number;
+  evasionRating: number;
+  movementSpeed: number;
+  // Resistances (final values including penalties)
+  fireResistance: number;
+  fireResistanceOverCap: number;
+  coldResistance: number;
+  coldResistanceOverCap: number;
+  lightningResistance: number;
+  lightningResistanceOverCap: number;
+  chaosResistance: number;
+  chaosResistanceOverCap: number;
+  // Survivability
+  effectiveHealthPool: number;
+  physicalMaximumHitTaken: number;
+  fireMaximumHitTaken: number;
+  coldMaximumHitTaken: number;
+  lightningMaximumHitTaken: number;
+  chaosMaximumHitTaken: number;
+  lowestMaximumHitTaken: number;
+  // Block / suppression
+  blockChance: number;
+  spellBlockChance: number;
+  spellSuppressionChance: number;
+  // Charges
+  enduranceCharges: number;
+  frenzyCharges: number;
+  powerCharges: number;
+  // Attributes
+  strength: number;
+  dexterity: number;
+  intelligence: number;
+}
+
 export interface CharacterData {
   account: string;
   name: string;
@@ -255,6 +294,7 @@ export interface CharacterData {
   skillGroups: CharacterSkillGroup[];
   keystones: string[];
   pobCode: string | null;
+  defensiveStats: DefensiveStats | null;
 }
 
 // ─── Decoded POB Build ───────────────────────────────────────────
@@ -297,6 +337,22 @@ export interface PopularItemsResult {
   slot: string;
   items: PopularItem[];
   currentItem: CharacterItem | null;
+}
+
+// ─── Saved Accounts (AsyncStorage persistence) ──────────────────
+
+export interface SavedCharacter {
+  name: string;
+  class: string;
+  level: number;
+  league: string;
+  lastLookup: number;
+}
+
+export interface SavedAccount {
+  accountName: string;
+  characters: SavedCharacter[];
+  lastUsed: number;
 }
 
 // ─── WebSocket Messages (from server.py /ws) ────────────────────

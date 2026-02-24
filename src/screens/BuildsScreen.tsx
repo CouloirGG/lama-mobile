@@ -9,6 +9,7 @@ import {
   StyleSheet,
   RefreshControl,
   ScrollView,
+  Alert,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as WebBrowser from "expo-web-browser";
@@ -22,9 +23,13 @@ import type {
   PopularAnoint,
   CharacterItem,
   CharacterSkillGroup,
+  CharacterData,
+  DefensiveStats,
   DecodedBuild,
   PopularItem,
   PopularItemsResult,
+  SavedAccount,
+  SavedCharacter,
 } from "../types";
 
 // ─── Helpers ────────────────────────────────────────────────────
@@ -65,6 +70,340 @@ function groupClasses(classes: ClassStatistic[]): ClassGroup[] {
   return Array.from(baseMap.values()).sort(
     (a, b) => b.base.percentage - a.base.percentage
   );
+}
+
+// ─── Build Analysis ─────────────────────────────────────────────
+
+interface BuildAnalysis {
+  damageType: "attack" | "spell" | "mixed" | "unknown";
+  elements: string[];      // "physical", "fire", "cold", "lightning", "chaos"
+  isCrit: boolean;
+  isCastOnCrit: boolean;   // true when main DPS is a spell triggered by attacks (CoC Comet etc.)
+  defenseType: "life" | "es" | "hybrid" | "mom";  // "mom" = MoM+EB (mana as buffer)
+  wantsArmour: boolean;    // true for melee/tank archetypes that benefit from armour
+  mainSkillName: string;
+  /** Stats that benefit this build's DPS, in rough priority order */
+  offensiveStats: string[];
+  /** Mods on gear that do nothing for this build archetype */
+  deadModPatterns: RegExp[];
+  /** Human-readable labels for dead mod patterns (parallel array) */
+  deadModReasons: string[];
+}
+
+// --- Skill classification lists ---
+
+const ATTACK_SKILLS = new Set([
+  // Melee
+  "Power Siphon", "Boneshatter", "Earthquake", "Ground Slam", "Sunder",
+  "Heavy Strike", "Glacial Hammer", "Lightning Strike", "Molten Strike",
+  "Viper Strike", "Double Strike", "Dual Strike", "Cleave", "Lacerate",
+  "Cyclone", "Flicker Strike", "Whirling Slash", "Shield Charge",
+  "Leap Slam", "Consecrated Path", "Tectonic Slam", "Perforate",
+  "Bladestorm", "Chain Hook", "Static Strike", "Smite", "Splitting Steel",
+  "Shattering Steel", "Lancing Steel",
+  "Mace Bash", "Spinning Assault", "Pounce",
+  "Ice Strike", "Quarterstaff Strike", "Shred",
+  "Rampage", "Hammer of the Gods", "Furious Slam", "Maul",
+  "Shield Wall", "Gathering Storm",
+  "Whirling Assault", "Devour", "Seismic Cry", "Primal Strikes",
+  "Fangs of Frost", "Storm Wave", "Falling Thunder",
+  // Ranged — Bow
+  "Split Arrow", "Lightning Arrow", "Ice Shot", "Burning Arrow",
+  "Tornado Shot", "Rain of Arrows", "Barrage", "Caustic Arrow",
+  "Scourge Arrow", "Galvanic Arrow", "Artillery Ballista",
+  "Shrapnel Ballista", "Siege Ballista", "Explosive Arrow",
+  "Power Shot", "Gas Arrow", "Rend", "Bow Shot", "Oil Barrage",
+  "Rapid Shot", "Focused Shot", "Snipe",
+  "Poisonburst Arrow", "Vine Arrow",
+  // Crossbow
+  "Bolt Burst", "Crossbow Shot", "Armour Piercing Rounds",
+  "Plasma Blast", "Explosive Grenade", "Oil Grenade",
+  "Galvanic Shards", "Stormblast Bolts",
+]);
+
+const SPELL_SKILLS = new Set([
+  // Cold
+  "Comet", "Ice Nova", "Frost Bolt", "Frostbolt", "Glacial Cascade",
+  "Arctic Breath", "Freezing Pulse", "Cold Snap", "Vortex", "Winter Orb",
+  "Frost Wall", "Frozen Orb", "Ice Spear",
+  "Frost Bomb", "Snap", "Freezing Shards",
+  // Fire
+  "Fireball", "Fire Ball", "Incinerate", "Flame Wall", "Fire Trap",
+  "Flammability", "Flame Surge", "Flame Bolt", "Living Bomb",
+  "Infernal Cry",
+  // Lightning
+  "Arc", "Ball Lightning", "Storm Call", "Lightning Tendrils",
+  "Spark", "Shock Nova", "Lightning Conduit", "Galvanic Field",
+  "Conductivity", "Orb of Storms", "Storm Bolt", "Lightning Spear",
+  "Lightning Rod", "Thunderstorm", "Lightning Warp",
+  // Chaos
+  "Blight", "Essence Drain", "Contagion", "Soulrend", "Bane",
+  "Dark Pact", "Forbidden Rite", "Chaos Bolt", "Hexblast",
+  "Entangle", "Requiem", "Toxic Growth", "Thrashing Vines",
+  // Nature / Druid
+  "Twister",
+  // Physical / generic
+  "Blade Vortex", "Ethereal Knives", "Bladefall", "Blade Blast",
+  "Reap", "Exsanguinate", "Rolling Magma", "Magma Orb",
+  "Bone Offering", "Spirit Offering", "Flesh Offering",
+  "Raise Zombie", "Summon Skeletons", "Summon Raging Spirit",
+  "Summon Phantasm", "Raise Spectre",
+  "Unearth", "Desecrate", "Spirit Nova",
+]);
+
+const MINION_SKILLS = new Set([
+  "Raise Zombie", "Summon Skeletons", "Summon Raging Spirit",
+  "Summon Phantasm", "Raise Spectre", "Animate Weapon",
+  "Dominate", "Summon Reaper", "Summon Volatile Dead",
+]);
+
+// Element detection from skill names and mod text
+const ELEMENT_KEYWORDS: Array<{ element: string; patterns: RegExp[] }> = [
+  { element: "fire", patterns: [/\bfire\b/i, /\bburn/i, /\bignite/i, /\bincinerate/i, /\bflame/i, /\binfernal/i, /\bliving bomb/i, /\boil barrage/i] },
+  { element: "cold", patterns: [/\bcold\b/i, /\bfreez/i, /\bfrost/i, /\bice\b/i, /\bglacial/i, /\bwinter/i, /\bcomet\b/i, /\bsnap\b/i, /\bfangs of frost/i] },
+  { element: "lightning", patterns: [/\blightning\b/i, /\bshock/i, /\barc\b/i, /\bspark\b/i, /\bgalvanic/i, /\bstorm/i, /\bconducti/i, /\bthunder/i] },
+  { element: "chaos", patterns: [/\bchaos\b/i, /\bpoison/i, /\bviper/i, /\bblight/i, /\bwither/i, /\bhexblast/i, /\bentangle/i, /\brequiem/i, /\btoxic/i, /\bthrashing vines/i] },
+  { element: "physical", patterns: [/\bphysical\b/i, /\bbleed/i, /\bimpale/i, /\bsteel\b/i, /\bbone\b/i, /\brampage\b/i, /\bsunder\b/i, /\bhammer\b/i, /\bmaul\b/i, /\bshred\b/i, /\btwister\b/i, /\bdevour\b/i, /\bseismic/i] },
+];
+
+// Keystones that hint at build archetype
+const CRIT_KEYSTONES = new Set([
+  "Inevitable Judgement", "Elemental Overload", "Precision",
+  "Deadly Precision", "Assassin's Mark", "Nightblade",
+]);
+const ES_KEYSTONES = new Set([
+  "Chaos Inoculation", "Ghost Reaver", "Wicked Ward",
+  "Arcane Surge", "Pain Attunement", "Energy Blade",
+]);
+
+// Melee skills that actually benefit from armour investment
+const MELEE_SKILLS = new Set([
+  "Sunder", "Heavy Strike", "Glacial Hammer", "Molten Strike", "Cyclone",
+  "Flicker Strike", "Whirling Slash", "Shield Charge", "Leap Slam",
+  "Tectonic Slam", "Perforate", "Bladestorm", "Static Strike", "Smite",
+  "Mace Bash", "Spinning Assault", "Pounce", "Ice Strike",
+  "Quarterstaff Strike", "Shred", "Rampage", "Hammer of the Gods",
+  "Furious Slam", "Maul", "Shield Wall", "Gathering Storm",
+  "Boneshatter", "Earthquake", "Ground Slam", "Lacerate", "Cleave",
+  "Whirling Assault", "Devour", "Seismic Cry", "Primal Strikes",
+  "Fangs of Frost", "Storm Wave", "Falling Thunder",
+]);
+
+function analyzeBuild(
+  character: CharacterData,
+  decodedBuild: DecodedBuild | null
+): BuildAnalysis {
+  // --- Determine main skill and damage type ---
+  let mainSkillName = "";
+  let mainDamage = 0;
+
+  for (const sg of character.skillGroups) {
+    for (const d of sg.dps) {
+      if (d.damage > mainDamage) {
+        mainDamage = d.damage;
+        mainSkillName = d.name;
+      }
+    }
+  }
+  // Fallback from decoded build
+  if (!mainSkillName && decodedBuild?.mainSkill) {
+    mainSkillName = decodedBuild.mainSkill.name;
+  }
+
+  // --- Detect Cast on Crit (CoC) ---
+  // CoC builds have a spell as the top DPS skill but use attacks to trigger it.
+  // Common pattern: main DPS skill is a spell (Comet) but the build has attack
+  // gems like Cyclone or Ice Shot in the same skill group.
+  let isCastOnCrit = false;
+  const allGemNames = character.skills.map((g) => g.name);
+  const hasCoCGem = allGemNames.some((n) => /Cast on Crit|Cast when Crit/i.test(n));
+  if (hasCoCGem && SPELL_SKILLS.has(mainSkillName)) {
+    isCastOnCrit = true;
+  }
+  // Heuristic: if the main DPS is a spell but the character has attack gems
+  // in the same skill group, it's likely CoC even without detecting the support
+  if (!isCastOnCrit && SPELL_SKILLS.has(mainSkillName)) {
+    for (const sg of character.skillGroups) {
+      const hasDpsSpell = sg.dps.some((d) => d.name === mainSkillName);
+      const hasAttackGem = sg.gems.some((g) => ATTACK_SKILLS.has(g));
+      if (hasDpsSpell && hasAttackGem) {
+        isCastOnCrit = true;
+        break;
+      }
+    }
+  }
+
+  // Classify damage type — CoC builds scale as spell even though they use attacks
+  let damageType: BuildAnalysis["damageType"] = "unknown";
+  if (MINION_SKILLS.has(mainSkillName)) {
+    damageType = "spell";
+  } else if (SPELL_SKILLS.has(mainSkillName)) {
+    damageType = "spell"; // includes CoC — the DPS comes from the spell
+  } else if (ATTACK_SKILLS.has(mainSkillName)) {
+    damageType = "attack";
+  } else {
+    // Heuristic: if weapon has high pDPS, likely attack
+    const wpn = decodedBuild?.weapon;
+    if (wpn && wpn.physicalDps > 50) {
+      damageType = "attack";
+    }
+    // Check gear for attack speed vs cast speed prevalence
+    let atkMods = 0;
+    let spellMods = 0;
+    for (const eq of character.equipment) {
+      const mods = [
+        ...(eq.explicitMods ?? []),
+        ...(eq.implicitMods ?? []),
+        ...(eq.craftedMods ?? []),
+      ].join(" ");
+      if (/attack speed/i.test(mods)) atkMods++;
+      if (/spell|cast speed/i.test(mods)) spellMods++;
+    }
+    if (atkMods > spellMods && damageType === "unknown") damageType = "attack";
+    else if (spellMods > atkMods && damageType === "unknown") damageType = "spell";
+    else if (atkMods > 0 && spellMods > 0) damageType = "mixed";
+  }
+
+  // --- Detect elements ---
+  const elements = new Set<string>();
+  for (const { element, patterns } of ELEMENT_KEYWORDS) {
+    for (const pat of patterns) {
+      if (pat.test(mainSkillName)) {
+        elements.add(element);
+      }
+    }
+  }
+  if (damageType === "attack") {
+    const wpn = decodedBuild?.weapon;
+    if (wpn) {
+      if (wpn.physicalDps > wpn.elementalDps) elements.add("physical");
+    }
+    if (elements.size === 0) elements.add("physical");
+  }
+  if (elements.size === 0 && damageType === "spell") {
+    for (const gem of character.skills) {
+      for (const { element, patterns } of ELEMENT_KEYWORDS) {
+        for (const pat of patterns) {
+          if (pat.test(gem.name)) elements.add(element);
+        }
+      }
+    }
+  }
+  if (elements.size === 0) elements.add("physical");
+
+  // --- Crit detection ---
+  const isCrit =
+    isCastOnCrit || // CoC builds are always crit
+    character.keystones.some((k) => CRIT_KEYSTONES.has(k)) ||
+    (decodedBuild?.weapon?.critChance ?? 0) > 7;
+
+  // --- Defense type ---
+  const hasMoM = character.keystones.includes("Mind Over Matter");
+  const hasEB = character.keystones.includes("Eldritch Battery");
+  const hasCI = character.keystones.includes("Chaos Inoculation");
+
+  let defenseType: BuildAnalysis["defenseType"] = "life";
+  if (hasCI) {
+    defenseType = "es";
+  } else if (hasMoM && hasEB) {
+    defenseType = "mom"; // MoM+EB: ES → mana → damage buffer. THE meta caster defense.
+  } else if (hasMoM) {
+    defenseType = "life"; // MoM without EB — life + mana hybrid, still "life" primary
+  } else if (character.keystones.some((k) => ES_KEYSTONES.has(k))) {
+    defenseType = "hybrid";
+  }
+
+  // --- Wants armour? Only melee/tank archetypes benefit ---
+  const wantsArmour = MELEE_SKILLS.has(mainSkillName) && !isCastOnCrit;
+
+  // --- Offensive stat priorities ---
+  const offensiveStats: string[] = [];
+  if (isCastOnCrit) {
+    // CoC needs both attack (to trigger) and spell (for damage)
+    offensiveStats.push("+gem levels", "spell damage", "critical strike chance");
+    offensiveStats.push("attack speed"); // faster attacks = more triggers
+    for (const el of ["fire", "cold", "lightning", "chaos"]) {
+      if (elements.has(el)) offensiveStats.push(`${el} damage`);
+    }
+    offensiveStats.push("critical strike multiplier");
+  } else if (damageType === "attack") {
+    if (elements.has("physical")) offensiveStats.push("flat physical damage");
+    for (const el of ["fire", "cold", "lightning"]) {
+      if (elements.has(el)) offensiveStats.push(`flat ${el} damage to attacks`);
+    }
+    offensiveStats.push("attack speed");
+    if (isCrit) offensiveStats.push("critical strike chance", "critical strike multiplier");
+    offensiveStats.push("increased damage");
+  } else if (damageType === "spell") {
+    offensiveStats.push("+gem levels", "spell damage");
+    for (const el of ["fire", "cold", "lightning", "chaos"]) {
+      if (elements.has(el)) offensiveStats.push(`${el} damage`);
+    }
+    offensiveStats.push("cast speed");
+    if (isCrit) offensiveStats.push("critical strike chance", "critical strike multiplier");
+  }
+
+  // --- Dead mod patterns ---
+  const deadModPatterns: RegExp[] = [];
+  const deadModReasons: string[] = [];
+
+  if (damageType === "spell" && !isCastOnCrit) {
+    // Pure spell (non-CoC): attack stats are dead
+    deadModPatterns.push(/increased Attack Speed/i);
+    deadModReasons.push("attack speed doesn't help spell builds");
+    deadModPatterns.push(/adds \d+ to \d+ .* Damage to Attacks/i);
+    deadModReasons.push("flat attack damage doesn't help spell builds");
+  }
+  // Note: CoC builds DO benefit from attack speed (more triggers), so don't flag it
+
+  if (damageType === "attack" && !isCastOnCrit) {
+    deadModPatterns.push(/increased Spell Damage/i);
+    deadModReasons.push("spell damage doesn't help attack builds");
+    deadModPatterns.push(/increased Cast Speed/i);
+    deadModReasons.push("cast speed doesn't help attack builds");
+    deadModPatterns.push(/adds \d+ to \d+ .* Damage to Spells/i);
+    deadModReasons.push("flat spell damage doesn't help attack builds");
+  }
+
+  // Wrong element flat damage (for non-weapon slots)
+  const elemList = Array.from(elements);
+  if (damageType === "attack" && elemList.length > 0 && !elemList.includes("physical")) {
+    const wrongElements = ["Fire", "Cold", "Lightning", "Chaos"].filter(
+      (el) => !elements.has(el.toLowerCase())
+    );
+    for (const el of wrongElements) {
+      deadModPatterns.push(new RegExp(`adds \\d+ to \\d+ ${el} Damage`, "i"));
+      deadModReasons.push(`${el.toLowerCase()} damage doesn't scale with your ${elemList[0]} build`);
+    }
+  }
+
+  // Mana: useful for MoM builds (they want max mana for bigger damage buffer)
+  const wantsMana = hasMoM;
+  if (!wantsMana) {
+    deadModPatterns.push(/\+\d+ to maximum Mana/i);
+    deadModReasons.push("mana provides no benefit to this build");
+  }
+
+  // Party/mount mods — only useful in groups or with a rideable mount
+  deadModPatterns.push(/Allies in your Presence/i);
+  deadModReasons.push("party/mount mod — only active with party members or a rideable mount");
+
+  // Item rarity — useful for MF farming builds, wasted otherwise
+  deadModPatterns.push(/increased Rarity of Items found/i);
+  deadModReasons.push("rarity mod — useful for MF farming, otherwise this affix slot could boost damage or defense");
+
+  return {
+    damageType,
+    elements: elemList,
+    isCrit,
+    isCastOnCrit,
+    defenseType,
+    wantsArmour,
+    mainSkillName,
+    offensiveStats,
+    deadModPatterns,
+    deadModReasons,
+  };
 }
 
 // ─── Percentage Bar ─────────────────────────────────────────────
@@ -223,6 +562,17 @@ function SkillDetailView({
 
 // ─── Character Lookup View ──────────────────────────────────────
 
+function formatTimeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function CharacterLookupView({
   accountInput,
   setAccountInput,
@@ -232,6 +582,10 @@ function CharacterLookupView({
   error,
   onLookup,
   onBack,
+  savedAccounts,
+  onSelectSavedCharacter,
+  onRemoveAccount,
+  onRemoveCharacter,
 }: {
   accountInput: string;
   setAccountInput: (v: string) => void;
@@ -241,9 +595,263 @@ function CharacterLookupView({
   error: string | null;
   onLookup: () => void;
   onBack: () => void;
+  savedAccounts: SavedAccount[];
+  onSelectSavedCharacter: (account: string, charName: string) => void;
+  onRemoveAccount: (accountName: string) => void;
+  onRemoveCharacter: (accountName: string, charName: string) => void;
 }) {
+  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  const [leagueFilter, setLeagueFilter] = useState<string | null>(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
+
+  // Find the selected saved account object
+  const activeAccount = useMemo(
+    () =>
+      selectedAccount
+        ? savedAccounts.find(
+            (a) => a.accountName.toLowerCase() === selectedAccount.toLowerCase()
+          ) ?? null
+        : null,
+    [savedAccounts, selectedAccount]
+  );
+
+  // If the user types an account name that matches a saved account, show it
+  const matchedAccount = useMemo(() => {
+    if (!accountInput.trim()) return null;
+    return (
+      savedAccounts.find(
+        (a) =>
+          a.accountName.toLowerCase() === accountInput.trim().toLowerCase()
+      ) ?? null
+    );
+  }, [savedAccounts, accountInput]);
+
+  // Effective account: either explicitly selected or matched by typing
+  const displayAccount = activeAccount ?? matchedAccount;
+
+  // Unique leagues from the active account's characters
+  const leagues = useMemo(() => {
+    if (!displayAccount) return [];
+    const set = new Set<string>();
+    for (const c of displayAccount.characters) {
+      if (c.league) set.add(c.league);
+    }
+    return Array.from(set);
+  }, [displayAccount]);
+
+  // Filtered characters
+  const filteredCharacters = useMemo(() => {
+    if (!displayAccount) return [];
+    let chars = displayAccount.characters;
+    if (leagueFilter) {
+      chars = chars.filter((c) => c.league === leagueFilter);
+    }
+    // Sort by lastLookup descending
+    return [...chars].sort((a, b) => b.lastLookup - a.lastLookup);
+  }, [displayAccount, leagueFilter]);
+
+  const handleSelectAccount = (acctName: string) => {
+    setSelectedAccount(acctName);
+    setAccountInput(acctName);
+    setLeagueFilter(null);
+    setShowManualEntry(false);
+  };
+
+  const handleBackToAccounts = () => {
+    setSelectedAccount(null);
+    setAccountInput("");
+    setCharacterInput("");
+    setLeagueFilter(null);
+    setShowManualEntry(false);
+  };
+
+  const handleDeleteAccount = (acctName: string) => {
+    Alert.alert(
+      "Remove Account",
+      `Remove "${acctName}" and all saved characters?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            onRemoveAccount(acctName);
+            if (selectedAccount?.toLowerCase() === acctName.toLowerCase()) {
+              handleBackToAccounts();
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteCharacter = (acctName: string, charName: string) => {
+    Alert.alert(
+      "Remove Character",
+      `Remove "${charName}" from saved characters?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => onRemoveCharacter(acctName, charName),
+        },
+      ]
+    );
+  };
+
+  // When an account is selected, show character list
+  if (displayAccount) {
+    return (
+      <ScrollView style={styles.subView} contentContainerStyle={styles.subViewContent}>
+        <View style={styles.subHeader}>
+          <Pressable
+            onPress={activeAccount ? handleBackToAccounts : onBack}
+            hitSlop={8}
+          >
+            <Text style={styles.backButton}>← Back</Text>
+          </Pressable>
+          <Text style={styles.subTitle} numberOfLines={1}>
+            {displayAccount.accountName}
+          </Text>
+        </View>
+
+        {/* League filter chips */}
+        {leagues.length > 1 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.leagueChipRow}
+            contentContainerStyle={styles.leagueChipContent}
+          >
+            <Pressable
+              style={[
+                styles.leagueChip,
+                !leagueFilter && styles.leagueChipActive,
+              ]}
+              onPress={() => setLeagueFilter(null)}
+            >
+              <Text
+                style={[
+                  styles.leagueChipText,
+                  !leagueFilter && styles.leagueChipTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </Pressable>
+            {leagues.map((league) => (
+              <Pressable
+                key={league}
+                style={[
+                  styles.leagueChip,
+                  leagueFilter === league && styles.leagueChipActive,
+                ]}
+                onPress={() =>
+                  setLeagueFilter(leagueFilter === league ? null : league)
+                }
+              >
+                <Text
+                  style={[
+                    styles.leagueChipText,
+                    leagueFilter === league && styles.leagueChipTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {league}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
+
+        {/* Character cards */}
+        <Text style={styles.sectionHeader}>CHARACTERS</Text>
+        {filteredCharacters.length === 0 ? (
+          <Text style={styles.emptyText}>
+            {leagueFilter
+              ? `No characters in ${leagueFilter}`
+              : "No saved characters"}
+          </Text>
+        ) : (
+          filteredCharacters.map((char) => (
+            <Pressable
+              key={char.name}
+              style={styles.savedCharCard}
+              onPress={() =>
+                onSelectSavedCharacter(displayAccount.accountName, char.name)
+              }
+              onLongPress={() =>
+                handleDeleteCharacter(displayAccount.accountName, char.name)
+              }
+            >
+              <View style={styles.savedCharInfo}>
+                <Text style={styles.savedCharName}>{char.name}</Text>
+                <Text style={styles.savedCharMeta}>
+                  Lv {char.level} {char.class}
+                </Text>
+              </View>
+              <View style={styles.savedCharRight}>
+                <View style={styles.leagueBadge}>
+                  <Text style={styles.leagueBadgeText} numberOfLines={1}>
+                    {char.league}
+                  </Text>
+                </View>
+                <Text style={styles.savedCharTime}>
+                  {formatTimeAgo(char.lastLookup)}
+                </Text>
+              </View>
+            </Pressable>
+          ))
+        )}
+
+        {/* Add character manually */}
+        {!showManualEntry ? (
+          <Pressable
+            style={styles.addCharRow}
+            onPress={() => setShowManualEntry(true)}
+          >
+            <Text style={styles.addCharText}>+ Add Character</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.lookupForm}>
+            <Text style={styles.formLabel}>Character Name</Text>
+            <TextInput
+              style={styles.formInput}
+              placeholder="Enter character name..."
+              placeholderTextColor={Colors.textMuted}
+              value={characterInput}
+              onChangeText={setCharacterInput}
+              autoCorrect={false}
+              autoCapitalize="none"
+              autoFocus
+            />
+            <Pressable
+              style={[
+                styles.lookupButton,
+                (!characterInput.trim() || loading) &&
+                  styles.lookupButtonDisabled,
+              ]}
+              onPress={onLookup}
+              disabled={!characterInput.trim() || loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color={Colors.bg} />
+              ) : (
+                <Text style={styles.lookupButtonText}>Look Up</Text>
+              )}
+            </Pressable>
+          </View>
+        )}
+
+        {error && <Text style={styles.errorText}>{error}</Text>}
+      </ScrollView>
+    );
+  }
+
+  // Default: show saved accounts list + account input
   return (
-    <View style={styles.subView}>
+    <ScrollView style={styles.subView} contentContainerStyle={styles.subViewContent}>
       <View style={styles.subHeader}>
         <Pressable onPress={onBack} hitSlop={8}>
           <Text style={styles.backButton}>← Back</Text>
@@ -251,6 +859,36 @@ function CharacterLookupView({
         <Text style={styles.subTitle}>Look Up Character</Text>
       </View>
 
+      {/* Saved accounts list */}
+      {savedAccounts.length > 0 && !accountInput.trim() && (
+        <>
+          <Text style={styles.sectionHeader}>SAVED ACCOUNTS</Text>
+          {savedAccounts.map((acct) => (
+            <Pressable
+              key={acct.accountName}
+              style={styles.savedAccountCard}
+              onPress={() => handleSelectAccount(acct.accountName)}
+              onLongPress={() => handleDeleteAccount(acct.accountName)}
+            >
+              <View style={styles.savedAccountInfo}>
+                <Text style={styles.savedAccountName}>
+                  {acct.accountName}
+                </Text>
+                <Text style={styles.savedAccountMeta}>
+                  {acct.characters.length}{" "}
+                  {acct.characters.length === 1 ? "character" : "characters"}
+                  {" · "}
+                  {formatTimeAgo(acct.lastUsed)}
+                </Text>
+              </View>
+              <Text style={styles.savedAccountChevron}>{"\u203A"}</Text>
+            </Pressable>
+          ))}
+          <View style={styles.savedAccountDivider} />
+        </>
+      )}
+
+      {/* Manual entry form */}
       <View style={styles.lookupForm}>
         <Text style={styles.formLabel}>Account Name</Text>
         <TextInput
@@ -292,7 +930,7 @@ function CharacterLookupView({
 
         {error && <Text style={styles.errorText}>{error}</Text>}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -424,6 +1062,271 @@ function BuildStatsSection({
   );
 }
 
+// ─── Defense Breakdown Panel ─────────────────────────────────────
+
+function ResistanceBar({
+  label,
+  value,
+  overCap,
+  color,
+}: {
+  label: string;
+  value: number;
+  overCap: number;
+  color: string;
+}) {
+  const cap = 75;
+  const pct = Math.min((value / cap) * 100, 100);
+  const isCapped = value >= cap;
+
+  return (
+    <View style={styles.resBarRow}>
+      <Text style={styles.resBarLabel}>{label}</Text>
+      <View style={styles.resBarTrack}>
+        <View
+          style={[
+            styles.resBarFill,
+            {
+              width: `${pct}%`,
+              backgroundColor: isCapped ? color : Colors.red,
+            },
+          ]}
+        />
+      </View>
+      <Text
+        style={[
+          styles.resBarValue,
+          { color: isCapped ? Colors.text : Colors.red },
+        ]}
+      >
+        {value}%
+      </Text>
+      {overCap > 0 && (
+        <Text style={styles.resBarOverCap}>+{overCap}</Text>
+      )}
+    </View>
+  );
+}
+
+function DefenseBreakdownPanel({
+  ds,
+  keystones,
+  buildAnalysis,
+}: {
+  ds: DefensiveStats;
+  keystones: string[];
+  buildAnalysis: BuildAnalysis | null;
+}) {
+  const hasMoM = keystones.includes("Mind Over Matter");
+  const hasEB = keystones.includes("Eldritch Battery");
+  const hasCI = keystones.includes("Chaos Inoculation");
+
+  // Determine the weakest max hit element
+  const hitThresholds = [
+    { label: "Physical", value: ds.physicalMaximumHitTaken, color: Colors.textSecondary },
+    { label: "Fire", value: ds.fireMaximumHitTaken, color: "#c64" },
+    { label: "Cold", value: ds.coldMaximumHitTaken, color: "#68b" },
+    { label: "Lightning", value: ds.lightningMaximumHitTaken, color: "#cc6" },
+    { label: "Chaos", value: ds.chaosMaximumHitTaken, color: "#a8a" },
+  ].filter((t) => t.value > 0);
+
+  const maxHitValue = Math.max(...hitThresholds.map((t) => t.value), 1);
+  const lowestHit = hitThresholds.reduce(
+    (min, t) => (t.value < min.value ? t : min),
+    hitThresholds[0] ?? { label: "Unknown", value: 0, color: Colors.text }
+  );
+
+  // EHP explanation for MoM / EB builds
+  const ehpExplanation = (() => {
+    if (hasMoM && hasEB) {
+      return `Mind Over Matter redirects damage to mana. Eldritch Battery makes ES protect mana. Your ${formatNumber(ds.mana)} mana pool absorbs ~40% of hits, extending your effective HP — but one-shots are capped by how much mana can absorb per hit.`;
+    }
+    if (hasMoM) {
+      return `Mind Over Matter redirects ~40% of damage to mana (${formatNumber(ds.mana)}). This extends your effective pool but doesn't raise your one-shot threshold proportionally — if mana is low from casting, damage overflows to life.`;
+    }
+    if (hasCI) {
+      return `Chaos Inoculation sets life to 1 — all damage is taken from ES (${formatNumber(ds.energyShield)}). You're immune to chaos/poison damage. Note: bleed still bypasses ES and hits life directly.`;
+    }
+    if (ds.energyShield > ds.life * 0.5) {
+      return `Hybrid life/ES build — ${formatNumber(ds.life)} life + ${formatNumber(ds.energyShield)} ES. ES absorbs damage first, then life. Warning: chaos/poison shreds ES, and bleed bypasses ES entirely.`;
+    }
+    return null;
+  })();
+
+  // Mitigation layers
+  const layers: Array<{ label: string; value: string; color: string }> = [];
+  if (ds.armour > 0) {
+    layers.push({ label: "Armour", value: formatNumber(ds.armour), color: Colors.textSecondary });
+  }
+  if (ds.evasionRating > 100) {
+    layers.push({ label: "Evasion", value: formatNumber(ds.evasionRating), color: Colors.cyan });
+  }
+  if (ds.blockChance > 0) {
+    layers.push({ label: "Block", value: `${ds.blockChance}%`, color: Colors.gold });
+  }
+  if (ds.spellBlockChance > 0) {
+    layers.push({ label: "Spell Block", value: `${ds.spellBlockChance}%`, color: Colors.gold });
+  }
+  if (ds.spellSuppressionChance > 0) {
+    layers.push({ label: "Suppression", value: `${ds.spellSuppressionChance}%`, color: Colors.cyan });
+  }
+
+  return (
+    <View>
+      <Text style={styles.sectionHeader}>DEFENSES</Text>
+
+      {/* Effective HP */}
+      <Panel style={styles.defensePanel}>
+        <View style={styles.defenseTopRow}>
+          <View style={styles.defenseHpBlock}>
+            <Text style={styles.defenseHpLabel}>EFFECTIVE HP</Text>
+            <Text style={styles.defenseHpValue}>
+              {formatNumber(ds.effectiveHealthPool)}
+            </Text>
+            <View style={styles.defensePoolBreakdown}>
+              <Text style={styles.defensePoolItem}>
+                <Text style={{ color: "#c44" }}>{formatNumber(ds.life)}</Text>
+                {" Life"}
+              </Text>
+              {ds.energyShield > 0 && (
+                <Text style={styles.defensePoolItem}>
+                  <Text style={{ color: "#6bf" }}>{formatNumber(ds.energyShield)}</Text>
+                  {" ES"}
+                </Text>
+              )}
+              {hasMoM && (
+                <Text style={styles.defensePoolItem}>
+                  <Text style={{ color: "#66b" }}>{formatNumber(ds.mana)}</Text>
+                  {" Mana (MoM)"}
+                </Text>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.defenseHitBlock}>
+            <Text style={styles.defenseHpLabel}>ONE-SHOT THRESHOLD</Text>
+            <Text style={[styles.defenseHitValue, { color: lowestHit.color }]}>
+              {formatNumber(ds.lowestMaximumHitTaken)}
+            </Text>
+            <Text style={styles.defenseHitNote}>
+              weakest: {lowestHit.label}
+            </Text>
+          </View>
+        </View>
+
+        {/* EHP Explanation */}
+        {ehpExplanation && (
+          <View style={styles.ehpExplainBox}>
+            <Text style={styles.ehpExplainText}>{ehpExplanation}</Text>
+          </View>
+        )}
+
+        {/* Why they differ */}
+        {ds.effectiveHealthPool > ds.lowestMaximumHitTaken * 1.5 && (
+          <Text style={styles.ehpWarning}>
+            Effective HP ({formatNumber(ds.effectiveHealthPool)}) is much higher
+            than one-shot threshold ({formatNumber(ds.lowestMaximumHitTaken)}).
+            You can sustain damage over time, but a single large{" "}
+            {lowestHit.label.toLowerCase()} hit above{" "}
+            {formatNumber(ds.lowestMaximumHitTaken)} will kill you.
+          </Text>
+        )}
+      </Panel>
+
+      {/* Max hit thresholds per element */}
+      <Panel style={styles.defensePanel}>
+        <Text style={styles.defenseSectionLabel}>MAX HIT SURVIVED</Text>
+        {hitThresholds.map((t) => (
+          <View key={t.label} style={styles.hitThresholdRow}>
+            <Text style={[styles.hitThresholdLabel, { color: t.color }]}>
+              {t.label}
+            </Text>
+            <View style={styles.hitThresholdBarTrack}>
+              <View
+                style={[
+                  styles.hitThresholdBarFill,
+                  {
+                    width: `${(t.value / maxHitValue) * 100}%`,
+                    backgroundColor: t.color,
+                    opacity: t.value === ds.lowestMaximumHitTaken ? 1 : 0.6,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={styles.hitThresholdValue}>
+              {formatNumber(t.value)}
+            </Text>
+          </View>
+        ))}
+      </Panel>
+
+      {/* Resistances */}
+      <Panel style={styles.defensePanel}>
+        <Text style={styles.defenseSectionLabel}>RESISTANCES</Text>
+        <ResistanceBar label="Fire" value={ds.fireResistance} overCap={ds.fireResistanceOverCap} color="#c64" />
+        <ResistanceBar label="Cold" value={ds.coldResistance} overCap={ds.coldResistanceOverCap} color="#68b" />
+        <ResistanceBar label="Ltng" value={ds.lightningResistance} overCap={ds.lightningResistanceOverCap} color="#cc6" />
+        {hasCI ? (
+          <View style={styles.resBarRow}>
+            <Text style={styles.resBarLabel}>Chaos</Text>
+            <View style={[styles.resBarTrack, { justifyContent: "center" }]}>
+              <Text style={{ color: "#a8a", fontSize: 11, fontWeight: "600", textAlign: "center" }}>
+                IMMUNE (CI)
+              </Text>
+            </View>
+            <Text style={[styles.resBarValue, { color: "#a8a" }]}>--</Text>
+          </View>
+        ) : (
+          <ResistanceBar label="Chaos" value={ds.chaosResistance} overCap={ds.chaosResistanceOverCap} color="#a8a" />
+        )}
+      </Panel>
+
+      {/* Mitigation layers */}
+      {layers.length > 0 && (
+        <Panel style={styles.defensePanel}>
+          <Text style={styles.defenseSectionLabel}>MITIGATION</Text>
+          <View style={styles.mitigationGrid}>
+            {layers.map((l) => (
+              <View key={l.label} style={styles.mitigationItem}>
+                <Text style={styles.mitigationLabel}>{l.label}</Text>
+                <Text style={[styles.mitigationValue, { color: l.color }]}>
+                  {l.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </Panel>
+      )}
+
+      {/* Defense commitment warning — builds need to invest in SOME defense layer */}
+      {(() => {
+        // CI builds have ES as their defense — that's accounted for above
+        if (hasCI) return null;
+        // Check if the build has meaningful investment in any defense layer
+        const hasArmour = ds.armour > 2000;
+        const hasEvasion = ds.evasionRating > 3000;
+        const hasBlock = ds.blockChance > 20;
+        const hasES = ds.energyShield > 2000;
+        const hasHighLife = ds.life > 2500;
+        const hasMoMPool = hasMoM && ds.mana > 3000;
+        const layers = [hasArmour, hasEvasion, hasBlock, hasES, hasHighLife, hasMoMPool].filter(Boolean).length;
+        if (layers === 0 && ds.effectiveHealthPool < 8000) {
+          return (
+            <View style={styles.noMitigationWarn}>
+              <Text style={styles.noMitigationText}>
+                Low defense investment — no strong commitment to armour, evasion, block,
+                ES, or life stacking. T4+ maps and endgame bosses will be very punishing.
+                Pick a defense strategy and invest in it.
+              </Text>
+            </View>
+          );
+        }
+        return null;
+      })()}
+    </View>
+  );
+}
+
 function ExpandableEquipItem({
   item,
   onShowPopular,
@@ -511,6 +1414,11 @@ function CharacterProfileView({
   onBack: () => void;
   onShowPopular: (slotName: string, currentItem: CharacterItem) => void;
 }) {
+  const buildAnalysis = useMemo(
+    () => analyzeBuild(character, decodedBuild),
+    [character, decodedBuild]
+  );
+
   const handleCopyPOB = useCallback(async () => {
     if (character.pobCode) {
       await Clipboard.setStringAsync(character.pobCode);
@@ -549,6 +1457,15 @@ function CharacterProfileView({
         decodedBuild={decodedBuild}
         decoding={decoding}
       />
+
+      {/* Defense Breakdown */}
+      {character.defensiveStats && (
+        <DefenseBreakdownPanel
+          ds={character.defensiveStats}
+          keystones={character.keystones}
+          buildAnalysis={buildAnalysis}
+        />
+      )}
 
       {/* Equipment */}
       {character.equipment.length > 0 && (
@@ -671,8 +1588,10 @@ interface ParsedStats {
   otherLines: string[];
 }
 
+type StatKey = keyof Omit<ParsedStats, "otherLines">;
+
 const STAT_PATTERNS: Array<{
-  key: keyof ParsedStats;
+  key: StatKey;
   pattern: RegExp;
 }> = [
   { key: "life", pattern: /\+?(\d+) to maximum Life/i },
@@ -688,6 +1607,77 @@ const STAT_PATTERNS: Array<{
   { key: "movementSpeed", pattern: /(\d+)% increased Movement Speed/i },
   { key: "attackSpeed", pattern: /(\d+)% increased Attack Speed/i },
 ];
+
+// T1 max roll values by slot category (POE2)
+// These are approximate T1 ceilings — the max a single mod can roll on ilvl 83+ gear
+const T1_MAX: Record<string, Partial<Record<StatKey, number>>> = {
+  // Armour slots (Helm, Body, Gloves, Boots, Shield)
+  Helm:       { life: 100, mana: 85, energyShield: 110, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  BodyArmour: { life: 130, mana: 100, energyShield: 150, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  Gloves:     { life: 100, mana: 85, energyShield: 110, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55, attackSpeed: 16 },
+  Boots:      { life: 100, mana: 85, energyShield: 110, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55, movementSpeed: 30 },
+  Shield:     { life: 100, mana: 85, energyShield: 150, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  Offhand:    { life: 100, mana: 85, energyShield: 150, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  // Accessories
+  Belt:       { life: 100, mana: 85, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  Amulet:     { life: 85, mana: 85, energyShield: 80, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  Ring:       { life: 75, mana: 75, energyShield: 60, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  Ring2:      { life: 75, mana: 75, energyShield: 60, fireRes: 46, coldRes: 46, lightningRes: 46, chaosRes: 26, strength: 55, dexterity: 55, intelligence: 55 },
+  // Weapons (limited defensive mods)
+  Weapon:     { attackSpeed: 27 },
+  Weapon2:    { attackSpeed: 27 },
+};
+
+// Normalize slot names (API may use "Body Armour", "Helmet", etc.)
+function getSlotMaxes(slot: string): Partial<Record<StatKey, number>> {
+  if (slot === "Body Armour") return T1_MAX.BodyArmour;
+  if (slot === "Helmet") return T1_MAX.Helm;
+  return T1_MAX[slot] ?? {};
+}
+
+// POE2 resistance cap per element
+const RES_CAP = 75;
+
+// Roll quality tier thresholds (% of T1 max)
+function rollTier(val: number, max: number): "great" | "ok" | "low" {
+  const pct = val / max;
+  if (pct >= 0.75) return "great";
+  if (pct >= 0.5) return "ok";
+  return "low";
+}
+
+function rollColor(tier: "great" | "ok" | "low"): string {
+  if (tier === "great") return "#4a7c59"; // green
+  if (tier === "ok") return Colors.amber;
+  return Colors.red;
+}
+
+// Sum parsed stats across all equipment to get character totals
+function sumCharacterStats(equipment: CharacterItem[]): ParsedStats {
+  const totals: ParsedStats = {
+    life: 0, mana: 0, energyShield: 0,
+    fireRes: 0, coldRes: 0, lightningRes: 0, chaosRes: 0,
+    strength: 0, dexterity: 0, intelligence: 0,
+    movementSpeed: 0, attackSpeed: 0,
+    otherLines: [],
+  };
+  for (const item of equipment) {
+    const s = parseItemStats(item);
+    totals.life += s.life;
+    totals.mana += s.mana;
+    totals.energyShield += s.energyShield;
+    totals.fireRes += s.fireRes;
+    totals.coldRes += s.coldRes;
+    totals.lightningRes += s.lightningRes;
+    totals.chaosRes += s.chaosRes;
+    totals.strength += s.strength;
+    totals.dexterity += s.dexterity;
+    totals.intelligence += s.intelligence;
+    totals.movementSpeed += s.movementSpeed;
+    totals.attackSpeed += s.attackSpeed;
+  }
+  return totals;
+}
 
 function parseItemStats(item: CharacterItem): ParsedStats {
   const stats: ParsedStats = {
@@ -747,96 +1737,348 @@ function parseItemStats(item: CharacterItem): ParsedStats {
   return stats;
 }
 
-function ItemStatSummary({ item, allEquipment }: { item: CharacterItem; allEquipment: CharacterItem[] }) {
+/** Stat row with mini roll-quality bar showing your roll vs T1 max */
+function RollQualityRow({
+  label,
+  value,
+  max,
+  color,
+  suffix,
+}: {
+  label: string;
+  value: number;
+  max: number | undefined;
+  color: string;
+  suffix?: string;
+}) {
+  if (!max) {
+    return (
+      <View style={styles.rollRow}>
+        <Text style={styles.rollLabel}>{label}</Text>
+        <Text style={[styles.rollValue, { color }]}>+{value}{suffix ?? ""}</Text>
+      </View>
+    );
+  }
+  const tier = rollTier(value, max);
+  const tierColor = rollColor(tier);
+  const pct = Math.min((value / max) * 100, 100);
+
+  return (
+    <View style={styles.rollRow}>
+      <Text style={styles.rollLabel}>{label}</Text>
+      <View style={styles.rollBarArea}>
+        <View style={styles.rollBarTrack}>
+          <View
+            style={[
+              styles.rollBarFill,
+              { width: `${pct}%`, backgroundColor: tierColor },
+            ]}
+          />
+        </View>
+        <Text style={[styles.rollValue, { color: tierColor }]}>
+          {value}{suffix ?? ""}{" "}
+          <Text style={styles.rollMax}>/ {max} T1</Text>
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function ItemStatSummary({
+  item,
+  allEquipment,
+  buildAnalysis,
+}: {
+  item: CharacterItem;
+  allEquipment: CharacterItem[];
+  buildAnalysis: BuildAnalysis | null;
+}) {
   const stats = useMemo(() => parseItemStats(item), [item]);
+  const slotMaxes = useMemo(() => getSlotMaxes(item.slot), [item.slot]);
+  const charTotals = useMemo(() => sumCharacterStats(allEquipment), [allEquipment]);
 
-  // Character-level resist totals from ALL gear
-  const charResists = useMemo(() => {
-    let fire = 0, cold = 0, lightning = 0, chaos = 0;
-    for (const equip of allEquipment) {
-      const s = parseItemStats(equip);
-      fire += s.fireRes;
-      cold += s.coldRes;
-      lightning += s.lightningRes;
-      chaos += s.chaosRes;
+  const isWeapon = ["Weapon", "Weapon2"].includes(item.slot);
+
+  const hasAnyStats =
+    stats.life > 0 || stats.mana > 0 || stats.energyShield > 0 ||
+    stats.fireRes > 0 || stats.coldRes > 0 || stats.lightningRes > 0 || stats.chaosRes > 0 ||
+    stats.strength > 0 || stats.dexterity > 0 || stats.intelligence > 0 ||
+    stats.movementSpeed > 0 || stats.attackSpeed > 0;
+
+  // ─── Dead mod detection ───────────────────────────────────────
+  const deadMods = useMemo(() => {
+    if (!buildAnalysis || isWeapon) return []; // Skip weapons — they're complex
+
+    const allMods = [
+      ...(item.explicitMods ?? []),
+      ...(item.craftedMods ?? []),
+      ...(item.enchantMods ?? []),
+    ];
+
+    const found: Array<{ mod: string; reason: string }> = [];
+    for (const mod of allMods) {
+      for (let i = 0; i < buildAnalysis.deadModPatterns.length; i++) {
+        if (buildAnalysis.deadModPatterns[i].test(mod)) {
+          found.push({ mod, reason: buildAnalysis.deadModReasons[i] });
+          break;
+        }
+      }
     }
-    return { fire, cold, lightning, chaos };
-  }, [allEquipment]);
+    return found;
+  }, [item, buildAnalysis, isWeapon]);
 
-  const totalEleRes = stats.fireRes + stats.coldRes + stats.lightningRes;
-  const hasResists = totalEleRes > 0 || stats.chaosRes > 0;
-  const hasDefenses = stats.life > 0 || stats.mana > 0 || stats.energyShield > 0;
-  const hasAttributes = stats.strength > 0 || stats.dexterity > 0 || stats.intelligence > 0;
+  // ─── Build-aware upgrade suggestions ──────────────────────────
+  const suggestions = useMemo(() => {
+    const lines: Array<{ text: string; color: string; priority: number }> = [];
+    if (isWeapon) return lines;
 
-  if (!hasResists && !hasDefenses && !hasAttributes && !stats.movementSpeed && !stats.attackSpeed) {
-    return null;
-  }
+    const ba = buildAnalysis;
 
-  // Build summary parts
-  const parts: Array<{ label: string; value: string; color: string }> = [];
+    // --- DPS suggestions (based on build archetype) ---
+    if (ba) {
+      // CoC builds: attack speed helps (more attacks = more crit triggers) but has diminishing
+      // returns due to internal cooldown on CoC. Still useful, but not the #1 stat.
+      if (ba.isCastOnCrit && item.slot === "Gloves") {
+        if (stats.attackSpeed === 0 && slotMaxes.attackSpeed) {
+          lines.push({
+            text: `CoC build — attack speed means more triggers (up to ${slotMaxes.attackSpeed}%), but has breakpoints`,
+            color: Colors.gold,
+            priority: 12,
+          });
+        }
+      } else if (ba.damageType === "attack" && !ba.isCastOnCrit && item.slot === "Gloves") {
+        // Pure attack builds: suggest attack speed on gloves
+        if (stats.attackSpeed === 0 && slotMaxes.attackSpeed) {
+          lines.push({
+            text: `${ba.mainSkillName || "Attack"} build — gloves can roll up to ${slotMaxes.attackSpeed}% attack speed`,
+            color: Colors.gold,
+            priority: 15,
+          });
+        } else if (stats.attackSpeed > 0 && slotMaxes.attackSpeed && stats.attackSpeed < slotMaxes.attackSpeed * 0.5) {
+          lines.push({
+            text: `Attack speed is low for an attack build (${stats.attackSpeed}% → ${slotMaxes.attackSpeed}% T1)`,
+            color: Colors.textSecondary,
+            priority: 8,
+          });
+        }
+      }
 
-  if (stats.life > 0) parts.push({ label: "Life", value: `+${stats.life}`, color: "#c44" });
-  if (stats.mana > 0) parts.push({ label: "Mana", value: `+${stats.mana}`, color: "#66b" });
-  if (stats.energyShield > 0) parts.push({ label: "ES", value: `+${stats.energyShield}`, color: "#6bf" });
+      // Spell builds (non-CoC): attack speed on gloves is wasted
+      if (ba.damageType === "spell" && !ba.isCastOnCrit && item.slot === "Gloves" && stats.attackSpeed > 0) {
+        lines.push({
+          text: `Spell build — cast speed or +gem levels would benefit ${ba.mainSkillName || "your skill"} more`,
+          color: Colors.gold,
+          priority: 14,
+        });
+      }
 
-  // Item-level resist breakdown
-  const resLines: string[] = [];
-  if (stats.fireRes > 0) resLines.push(`Fire ${stats.fireRes}%`);
-  if (stats.coldRes > 0) resLines.push(`Cold ${stats.coldRes}%`);
-  if (stats.lightningRes > 0) resLines.push(`Ltng ${stats.lightningRes}%`);
-  if (stats.chaosRes > 0) resLines.push(`Chaos ${stats.chaosRes}%`);
+      // Crit builds: mention crit mods when missing from applicable slots
+      if (ba.isCrit && ["Amulet", "Ring", "Ring2", "Gloves"].includes(item.slot)) {
+        const allModText = [
+          ...(item.explicitMods ?? []),
+          ...(item.craftedMods ?? []),
+          ...(item.implicitMods ?? []),
+        ].join(" ");
+        const hasCrit = /crit/i.test(allModText);
+        if (!hasCrit) {
+          lines.push({
+            text: ba.isCastOnCrit
+              ? `CoC crit build — crit chance here would mean more spell triggers`
+              : `Crit build with no crit mods here — crit chance/multi would boost DPS`,
+            color: Colors.gold,
+            priority: 12,
+          });
+        }
+      }
 
-  if (hasResists) {
-    parts.push({
-      label: "Resists",
-      value: `${totalEleRes + stats.chaosRes}% total`,
-      color: Colors.text,
-    });
-  }
+      // Boots: movement speed is universally important
+      if (item.slot === "Boots" && stats.movementSpeed === 0 && slotMaxes.movementSpeed) {
+        lines.push({
+          text: `No movement speed — boots can roll up to ${slotMaxes.movementSpeed}%`,
+          color: Colors.amber,
+          priority: 13,
+        });
+      } else if (item.slot === "Boots" && stats.movementSpeed > 0 && slotMaxes.movementSpeed && stats.movementSpeed < slotMaxes.movementSpeed * 0.5) {
+        lines.push({
+          text: `Low move speed (${stats.movementSpeed}%) — T1 is ${slotMaxes.movementSpeed}%`,
+          color: Colors.textSecondary,
+          priority: 6,
+        });
+      }
 
-  if (stats.movementSpeed > 0) parts.push({ label: "Move", value: `${stats.movementSpeed}%`, color: Colors.cyan });
-  if (stats.attackSpeed > 0) parts.push({ label: "AtkSpd", value: `${stats.attackSpeed}%`, color: Colors.cyan });
+      // ES builds: suggest ES over life
+      if (ba.defenseType === "es" && stats.life > 0 && stats.energyShield === 0 && slotMaxes.energyShield) {
+        lines.push({
+          text: `CI build — energy shield (up to +${slotMaxes.energyShield}) would be more effective than life here`,
+          color: Colors.amber,
+          priority: 11,
+        });
+      }
 
-  if (hasAttributes) {
-    const attrParts: string[] = [];
-    if (stats.strength > 0) attrParts.push(`Str ${stats.strength}`);
-    if (stats.dexterity > 0) attrParts.push(`Dex ${stats.dexterity}`);
-    if (stats.intelligence > 0) attrParts.push(`Int ${stats.intelligence}`);
-    parts.push({ label: "Attr", value: attrParts.join(", "), color: Colors.textSecondary });
-  }
+      // MoM+EB builds: mana is actually valuable (it's your damage buffer)
+      if (ba.defenseType === "mom" && item.slot !== "Weapon" && item.slot !== "Weapon2") {
+        if (stats.mana === 0 && slotMaxes.mana) {
+          lines.push({
+            text: `MoM+EB build — mana is your damage buffer. Slot can roll up to +${slotMaxes.mana}`,
+            color: Colors.textSecondary,
+            priority: 4,
+          });
+        }
+      }
+    }
 
-  // Character-level resist warnings — only flag if gear total is under 75%
-  const RES_CAP = 75;
-  const charGaps: string[] = [];
-  if (charResists.fire < RES_CAP) charGaps.push(`Fire ${charResists.fire}%`);
-  if (charResists.cold < RES_CAP) charGaps.push(`Cold ${charResists.cold}%`);
-  if (charResists.lightning < RES_CAP) charGaps.push(`Lightning ${charResists.lightning}%`);
+    // --- Resistance gaps vs cap ---
+    // Note: only 39% of top builds have all resists capped (avg top-tier = ~61%).
+    // Uncapped res is normal — only flag large gaps or easy gains, not minor shortfalls.
+    const resChecks: Array<{ key: StatKey; label: string; charTotal: number }> = [
+      { key: "fireRes", label: "Fire res", charTotal: charTotals.fireRes },
+      { key: "coldRes", label: "Cold res", charTotal: charTotals.coldRes },
+      { key: "lightningRes", label: "Ltng res", charTotal: charTotals.lightningRes },
+    ];
 
-  // Character resist summary line
-  const charResLine = `Gear resists: Fire ${charResists.fire}% · Cold ${charResists.cold}% · Ltng ${charResists.lightning}%`;
+    for (const { key, label, charTotal } of resChecks) {
+      const gap = RES_CAP - charTotal;
+      const itemVal = stats[key] as number;
+      const slotMax = slotMaxes[key];
+
+      // Only flag significant gaps (>20%) where the item has room to help
+      if (gap > 20 && itemVal === 0 && slotMax) {
+        lines.push({
+          text: `${charTotal}% ${label} (${gap}% under cap) — this slot can roll up to ${slotMax}%`,
+          color: Colors.amber,
+          priority: 8 + Math.min(gap, 30), // higher priority for bigger gaps
+        });
+      } else if (gap > 10 && itemVal > 0 && slotMax && itemVal < slotMax * 0.4) {
+        lines.push({
+          text: `${label} ${itemVal}% (char ${charTotal}%, gap ${gap}%) — T1 is ${slotMax}%`,
+          color: Colors.textSecondary,
+          priority: 4,
+        });
+      }
+    }
+
+    // Chaos res: skip for CI builds (they're immune — 0% on poe.ninja is expected)
+    // Chaos is the most expensive resist to solve for, so only flag big negatives
+    if (ba?.defenseType !== "es" && charTotals.chaosRes < -20 && stats.chaosRes === 0 && slotMaxes.chaosRes) {
+      lines.push({
+        text: `Very low chaos res (${charTotals.chaosRes}%) — chaos is expensive to cap but this slot can roll ${slotMaxes.chaosRes}%`,
+        color: Colors.amber,
+        priority: 7,
+      });
+    }
+
+    // --- Life / ES check (only if build cares) ---
+    const primaryDefense = ba?.defenseType ?? "life";
+    if ((primaryDefense === "life" || primaryDefense === "mom") && slotMaxes.life) {
+      if (stats.life === 0) {
+        lines.push({
+          text: `No life on this item — slot can roll up to +${slotMaxes.life}`,
+          color: Colors.amber,
+          priority: 7,
+        });
+      } else if (stats.life < slotMaxes.life * 0.4) {
+        const gain = slotMaxes.life - stats.life;
+        lines.push({
+          text: `Life roll could be ${gain} higher (${stats.life} → ${slotMaxes.life} T1)`,
+          color: Colors.textSecondary,
+          priority: 3,
+        });
+      }
+    }
+    if (primaryDefense === "es" && slotMaxes.energyShield) {
+      if (stats.energyShield === 0) {
+        lines.push({
+          text: `No ES on this item — slot can roll up to +${slotMaxes.energyShield}`,
+          color: Colors.amber,
+          priority: 7,
+        });
+      }
+    }
+
+    // Sort by priority descending, cap at 4
+    lines.sort((a, b) => b.priority - a.priority);
+    return lines.slice(0, 4);
+  }, [stats, slotMaxes, charTotals, item.slot, buildAnalysis, isWeapon]);
+
+  // If nothing to show, hide
+  if (!hasAnyStats && suggestions.length === 0 && deadMods.length === 0) return null;
+
+  // Build stat rows to render
+  const statRows: Array<{ label: string; value: number; max: number | undefined; color: string; suffix?: string }> = [];
+
+  if (stats.life > 0) statRows.push({ label: "Life", value: stats.life, max: slotMaxes.life, color: "#c44" });
+  if (stats.mana > 0) statRows.push({ label: "Mana", value: stats.mana, max: slotMaxes.mana, color: "#66b" });
+  if (stats.energyShield > 0) statRows.push({ label: "ES", value: stats.energyShield, max: slotMaxes.energyShield, color: "#6bf" });
+  if (stats.fireRes > 0) statRows.push({ label: "Fire Res", value: stats.fireRes, max: slotMaxes.fireRes, color: "#c64", suffix: "%" });
+  if (stats.coldRes > 0) statRows.push({ label: "Cold Res", value: stats.coldRes, max: slotMaxes.coldRes, color: "#68b", suffix: "%" });
+  if (stats.lightningRes > 0) statRows.push({ label: "Ltng Res", value: stats.lightningRes, max: slotMaxes.lightningRes, color: "#cc6", suffix: "%" });
+  if (stats.chaosRes > 0) statRows.push({ label: "Chaos Res", value: stats.chaosRes, max: slotMaxes.chaosRes, color: "#a8a", suffix: "%" });
+  if (stats.movementSpeed > 0) statRows.push({ label: "Move Spd", value: stats.movementSpeed, max: slotMaxes.movementSpeed, color: Colors.cyan, suffix: "%" });
+  if (stats.attackSpeed > 0) statRows.push({ label: "Atk Spd", value: stats.attackSpeed, max: slotMaxes.attackSpeed, color: Colors.cyan, suffix: "%" });
+
+  if (stats.strength > 0) statRows.push({ label: "Str", value: stats.strength, max: slotMaxes.strength, color: Colors.textSecondary });
+  if (stats.dexterity > 0) statRows.push({ label: "Dex", value: stats.dexterity, max: slotMaxes.dexterity, color: Colors.textSecondary });
+  if (stats.intelligence > 0) statRows.push({ label: "Int", value: stats.intelligence, max: slotMaxes.intelligence, color: Colors.textSecondary });
+
+  // Build archetype label
+  const archetypeLabel = buildAnalysis
+    ? [
+        buildAnalysis.isCastOnCrit ? "CoC" : (buildAnalysis.damageType !== "unknown" ? buildAnalysis.damageType : null),
+        buildAnalysis.isCrit && !buildAnalysis.isCastOnCrit ? "crit" : null,
+        buildAnalysis.elements.length > 0 ? buildAnalysis.elements.join("/") : null,
+        buildAnalysis.defenseType === "es" ? "CI" :
+          buildAnalysis.defenseType === "mom" ? "MoM+EB" :
+          buildAnalysis.defenseType === "hybrid" ? "HYBRID" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
 
   return (
     <View style={styles.statSummary}>
       <View style={styles.statSummaryDivider} />
-      <Text style={styles.statSummaryLabel}>STAT CHECK</Text>
-      <View style={styles.statSummaryGrid}>
-        {parts.map((p) => (
-          <View key={p.label} style={styles.statSummaryItem}>
-            <Text style={styles.statSummaryItemLabel}>{p.label}</Text>
-            <Text style={[styles.statSummaryItemValue, { color: p.color }]}>{p.value}</Text>
-          </View>
-        ))}
+      <View style={styles.statCheckHeader}>
+        <Text style={styles.statSummaryLabel}>STAT CHECK</Text>
+        {archetypeLabel ? (
+          <Text style={styles.archetypeTag}>{archetypeLabel}</Text>
+        ) : null}
       </View>
-      {resLines.length > 0 && (
-        <Text style={styles.statSummaryDetail}>This item: {resLines.join(" · ")}</Text>
+
+      {/* Roll quality rows with mini bars */}
+      {statRows.map((row) => (
+        <RollQualityRow
+          key={row.label}
+          label={row.label}
+          value={row.value}
+          max={row.max}
+          color={row.color}
+          suffix={row.suffix}
+        />
+      ))}
+
+      {/* Dead mods / wasted affixes */}
+      {deadMods.length > 0 && (
+        <View style={styles.deadModsBlock}>
+          <Text style={styles.deadModsLabel}>WASTED AFFIXES</Text>
+          {deadMods.map((dm, i) => (
+            <View key={i} style={styles.deadModRow}>
+              <Text style={styles.deadModText}>{dm.mod}</Text>
+              <Text style={styles.deadModReason}>{dm.reason}</Text>
+            </View>
+          ))}
+        </View>
       )}
-      {allEquipment.length > 0 && (
-        <Text style={styles.statSummaryDetail}>{charResLine}</Text>
-      )}
-      {charGaps.length > 0 && (
-        <Text style={styles.statSummaryGap}>
-          Under 75% from gear: {charGaps.join(", ")}
-        </Text>
+
+      {/* Build-aware upgrade suggestions */}
+      {suggestions.length > 0 && (
+        <View style={styles.suggestionsBlock}>
+          <Text style={styles.suggestionsLabel}>UPGRADE OPPORTUNITIES</Text>
+          {suggestions.map((s, i) => (
+            <Text key={i} style={[styles.suggestionText, { color: s.color }]}>
+              {s.text}
+            </Text>
+          ))}
+        </View>
       )}
     </View>
   );
@@ -985,11 +2227,13 @@ function PopularItemsView({
   loading,
   onBack,
   allEquipment,
+  buildAnalysis,
 }: {
   result: PopularItemsResult | null;
   loading: boolean;
   onBack: () => void;
   allEquipment: CharacterItem[];
+  buildAnalysis: BuildAnalysis | null;
 }) {
   const maxPct = useMemo(() => {
     if (!result?.items.length) return 100;
@@ -1017,7 +2261,7 @@ function PopularItemsView({
             {result.currentItem.name || result.currentItem.typeLine}
           </Text>
           <CurrentItemMods item={result.currentItem} />
-          <ItemStatSummary item={result.currentItem} allEquipment={allEquipment} />
+          <ItemStatSummary item={result.currentItem} allEquipment={allEquipment} buildAnalysis={buildAnalysis} />
         </Panel>
       )}
 
@@ -1127,6 +2371,10 @@ export default function BuildsScreen() {
           error={builds.error}
           onLookup={builds.lookupCharacter}
           onBack={builds.goBack}
+          savedAccounts={builds.savedAccounts}
+          onSelectSavedCharacter={builds.selectSavedCharacter}
+          onRemoveAccount={builds.removeSavedAccount}
+          onRemoveCharacter={builds.removeSavedCharacter}
         />
       </SafeAreaView>
     );
@@ -1142,6 +2390,11 @@ export default function BuildsScreen() {
           loading={builds.popularItemsLoading}
           onBack={builds.goBack}
           allEquipment={builds.characterData?.equipment ?? []}
+          buildAnalysis={
+            builds.characterData
+              ? analyzeBuild(builds.characterData, builds.decodedBuild)
+              : null
+          }
         />
       </SafeAreaView>
     );
@@ -1470,6 +2723,132 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
   },
 
+  // Saved Accounts
+  savedAccountCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+  },
+  savedAccountInfo: {
+    flex: 1,
+  },
+  savedAccountName: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  savedAccountMeta: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  savedAccountChevron: {
+    color: Colors.textMuted,
+    fontSize: 20,
+    marginLeft: 8,
+  },
+  savedAccountDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 12,
+  },
+
+  // Saved Characters
+  savedCharCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 6,
+  },
+  savedCharInfo: {
+    flex: 1,
+  },
+  savedCharName: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  savedCharMeta: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  savedCharRight: {
+    alignItems: "flex-end",
+    gap: 4,
+  },
+  savedCharTime: {
+    color: Colors.textMuted,
+    fontSize: 10,
+  },
+
+  // League badges & filter chips
+  leagueBadge: {
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  leagueBadgeText: {
+    color: Colors.gold,
+    fontSize: 10,
+    fontWeight: "600",
+    maxWidth: 120,
+  },
+  leagueChipRow: {
+    marginBottom: 12,
+    maxHeight: 36,
+  },
+  leagueChipContent: {
+    gap: 6,
+    paddingRight: 4,
+  },
+  leagueChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.card,
+  },
+  leagueChipActive: {
+    borderColor: Colors.gold,
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+  },
+  leagueChipText: {
+    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  leagueChipTextActive: {
+    color: Colors.gold,
+  },
+
+  // Add character row
+  addCharRow: {
+    paddingVertical: 12,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    borderStyle: "dashed",
+    marginTop: 8,
+  },
+  addCharText: {
+    color: Colors.gold,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
   // Character Lookup Form
   lookupForm: {
     paddingTop: 8,
@@ -1518,6 +2897,194 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     textAlign: "center",
+  },
+
+  // Defense Breakdown
+  defensePanel: {
+    padding: 12,
+    marginBottom: 8,
+  },
+  defenseTopRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  defenseHpBlock: {
+    flex: 1,
+    alignItems: "center",
+  },
+  defenseHitBlock: {
+    flex: 1,
+    alignItems: "center",
+  },
+  defenseHpLabel: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  defenseHpValue: {
+    color: Colors.gold,
+    fontSize: 20,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  defenseHitValue: {
+    fontSize: 20,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  defenseHitNote: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  defensePoolBreakdown: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  defensePoolItem: {
+    color: Colors.textSecondary,
+    fontSize: 10,
+  },
+  defenseSectionLabel: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  ehpExplainBox: {
+    marginTop: 10,
+    padding: 8,
+    backgroundColor: "rgba(196, 164, 86, 0.08)",
+    borderRadius: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: Colors.gold,
+  },
+  ehpExplainText: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  ehpWarning: {
+    color: Colors.amber,
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 8,
+  },
+
+  // Resistance bars
+  resBarRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  resBarLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: "600",
+    width: 38,
+  },
+  resBarTrack: {
+    flex: 1,
+    height: 6,
+    backgroundColor: Colors.border,
+    borderRadius: 3,
+    overflow: "hidden",
+    marginHorizontal: 6,
+  },
+  resBarFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  resBarValue: {
+    fontSize: 11,
+    fontWeight: "700",
+    fontFamily: "monospace",
+    width: 32,
+    textAlign: "right",
+  },
+  resBarOverCap: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontFamily: "monospace",
+    width: 24,
+    textAlign: "right",
+  },
+
+  // Max hit thresholds
+  hitThresholdRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 5,
+  },
+  hitThresholdLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    width: 55,
+  },
+  hitThresholdBarTrack: {
+    flex: 1,
+    height: 5,
+    backgroundColor: Colors.border,
+    borderRadius: 2,
+    overflow: "hidden",
+    marginHorizontal: 6,
+  },
+  hitThresholdBarFill: {
+    height: "100%",
+    borderRadius: 2,
+  },
+  hitThresholdValue: {
+    color: Colors.text,
+    fontSize: 10,
+    fontWeight: "700",
+    fontFamily: "monospace",
+    width: 42,
+    textAlign: "right",
+  },
+
+  // Mitigation grid
+  mitigationGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  mitigationItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  mitigationLabel: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  mitigationValue: {
+    fontSize: 11,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  noMitigationWarn: {
+    backgroundColor: "rgba(168, 50, 50, 0.1)",
+    borderRadius: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: Colors.red,
+    padding: 8,
+    marginTop: 4,
+  },
+  noMitigationText: {
+    color: Colors.red,
+    fontSize: 11,
+    lineHeight: 16,
   },
 
   // DPS section
@@ -1726,40 +3293,110 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 6,
   },
-  statSummaryGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 4,
-  },
-  statSummaryItem: {
+
+  // Roll quality rows
+  rollRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    gap: 4,
+    marginBottom: 5,
   },
-  statSummaryItemLabel: {
+  rollLabel: {
     color: Colors.textMuted,
     fontSize: 10,
     fontWeight: "600",
+    width: 62,
   },
-  statSummaryItemValue: {
-    fontSize: 11,
+  rollBarArea: {
+    flex: 1,
+  },
+  rollBarTrack: {
+    height: 4,
+    backgroundColor: Colors.border,
+    borderRadius: 2,
+    overflow: "hidden",
+    marginBottom: 2,
+  },
+  rollBarFill: {
+    height: "100%",
+    borderRadius: 2,
+  },
+  rollValue: {
+    fontSize: 10,
     fontWeight: "700",
     fontFamily: "monospace",
   },
-  statSummaryDetail: {
-    color: Colors.textSecondary,
-    fontSize: 10,
-    marginTop: 4,
+  rollMax: {
+    color: Colors.textMuted,
+    fontWeight: "400",
   },
-  statSummaryGap: {
-    color: "#a83232",
-    fontSize: 10,
+
+  // Stat check header with archetype tag
+  statCheckHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  archetypeTag: {
+    color: Colors.gold,
+    fontSize: 9,
     fontWeight: "600",
-    marginTop: 3,
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+    borderRadius: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    overflow: "hidden",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+
+  // Dead mods / wasted affixes
+  deadModsBlock: {
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  deadModsLabel: {
+    color: Colors.red,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  deadModRow: {
+    marginBottom: 4,
+  },
+  deadModText: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    textDecorationLine: "line-through",
+  },
+  deadModReason: {
+    color: Colors.red,
+    fontSize: 10,
+    fontStyle: "italic",
+    marginLeft: 8,
+  },
+
+  // Upgrade suggestions
+  suggestionsBlock: {
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  suggestionsLabel: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  suggestionText: {
+    fontSize: 11,
+    lineHeight: 16,
+    marginBottom: 3,
   },
   metaInsightPanel: {
     padding: 12,

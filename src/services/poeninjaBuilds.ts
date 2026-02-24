@@ -16,6 +16,7 @@ import type {
   CharacterSkillGem,
   CharacterSkillGroup,
   SkillGroupDps,
+  DefensiveStats,
 } from "../types";
 
 const BASE_URL = "https://poe.ninja/poe2/api";
@@ -359,6 +360,45 @@ export async function fetchCharacter(
     const ascName = (data.class as string) ?? "";
     const baseClass = ASCENDANCY_MAP[ascName] ?? ascName;
 
+    // Parse defensive stats from poe.ninja's calculated values
+    const rawDS = data.defensiveStats as Record<string, unknown> | undefined;
+    const n = (v: unknown): number => (typeof v === "number" ? v : 0);
+    const defensiveStats: DefensiveStats | null = rawDS
+      ? {
+          life: n(rawDS.life),
+          energyShield: n(rawDS.energyShield),
+          mana: n(rawDS.mana),
+          spirit: n(rawDS.spirit),
+          armour: n(rawDS.armour),
+          evasionRating: n(rawDS.evasionRating),
+          movementSpeed: n(rawDS.movementSpeed),
+          fireResistance: n(rawDS.fireResistance),
+          fireResistanceOverCap: n(rawDS.fireResistanceOverCap),
+          coldResistance: n(rawDS.coldResistance),
+          coldResistanceOverCap: n(rawDS.coldResistanceOverCap),
+          lightningResistance: n(rawDS.lightningResistance),
+          lightningResistanceOverCap: n(rawDS.lightningResistanceOverCap),
+          chaosResistance: n(rawDS.chaosResistance),
+          chaosResistanceOverCap: n(rawDS.chaosResistanceOverCap),
+          effectiveHealthPool: n(rawDS.effectiveHealthPool),
+          physicalMaximumHitTaken: n(rawDS.physicalMaximumHitTaken),
+          fireMaximumHitTaken: n(rawDS.fireMaximumHitTaken),
+          coldMaximumHitTaken: n(rawDS.coldMaximumHitTaken),
+          lightningMaximumHitTaken: n(rawDS.lightningMaximumHitTaken),
+          chaosMaximumHitTaken: n(rawDS.chaosMaximumHitTaken),
+          lowestMaximumHitTaken: n(rawDS.lowestMaximumHitTaken),
+          blockChance: n(rawDS.blockChance),
+          spellBlockChance: n(rawDS.spellBlockChance),
+          spellSuppressionChance: n(rawDS.spellSuppressionChance),
+          enduranceCharges: n(rawDS.enduranceCharges),
+          frenzyCharges: n(rawDS.frenzyCharges),
+          powerCharges: n(rawDS.powerCharges),
+          strength: n(rawDS.strength),
+          dexterity: n(rawDS.dexterity),
+          intelligence: n(rawDS.intelligence),
+        }
+      : null;
+
     const result: CharacterData = {
       account: (data.account as string) ?? normalizedAccount,
       name: (data.name as string) ?? charName,
@@ -370,6 +410,7 @@ export async function fetchCharacter(
       skillGroups,
       keystones,
       pobCode: (data.pathOfBuildingExport as string) ?? null,
+      defensiveStats,
     };
 
     setCache(cacheKey, result, TTL_CHARACTER);

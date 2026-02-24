@@ -19,6 +19,7 @@ import type {
   CharacterItem,
   DecodedBuild,
   PopularItemsResult,
+  SavedAccount,
 } from "../types";
 import {
   fetchSnapshotInfo,
@@ -31,6 +32,7 @@ import {
 import { fetchPopularItems } from "../services/poeninjaBuildsSearch";
 import { fetchUniquePricesForSlot } from "../services/poe2scout";
 import { decodePobCode } from "../utils/pobDecoder";
+import { useSavedAccounts } from "./useSavedAccounts";
 
 // ─── Slot → poe2scout unique slug mapping ────────────────────────
 
@@ -69,6 +71,15 @@ export function useBuildsData() {
   // Popular items state
   const [popularItemsResult, setPopularItemsResult] = useState<PopularItemsResult | null>(null);
   const [popularItemsLoading, setPopularItemsLoading] = useState(false);
+
+  // Saved accounts
+  const {
+    savedAccounts,
+    saveCharacter,
+    removeSavedAccount,
+    removeSavedCharacter,
+    getAccountCharacters,
+  } = useSavedAccounts();
 
   // ─── Init flow ──────────────────────────────────────────────────
 
@@ -162,6 +173,15 @@ export function useBuildsData() {
         setViewMode("characterLookup");
       } else {
         setCharacterData(data);
+
+        // Auto-save to saved accounts
+        const league = summary?.leagueName ?? "Unknown";
+        saveCharacter(
+          accountInput.trim(),
+          { name: data.name, class: data.ascendancy || data.class, level: data.level },
+          league
+        );
+
         if (data.pobCode) {
           setDecoding(true);
           try {
@@ -177,7 +197,7 @@ export function useBuildsData() {
     } finally {
       setCharacterLoading(false);
     }
-  }, [snapshotInfo, accountInput, characterInput]);
+  }, [snapshotInfo, accountInput, characterInput, summary, saveCharacter]);
 
   const showPopularItemsForSlot = useCallback(
     async (slotName: string, currentItem: CharacterItem | null) => {
@@ -250,6 +270,60 @@ export function useBuildsData() {
     [snapshotInfo, characterData]
   );
 
+  const selectSavedCharacter = useCallback(
+    (account: string, charName: string) => {
+      setAccountInput(account);
+      setCharacterInput(charName);
+      // Trigger lookup after setting inputs
+      if (!snapshotInfo) return;
+
+      setCharacterLoading(true);
+      setError(null);
+      setViewMode("characterResult");
+
+      (async () => {
+        try {
+          const snap = snapshotInfo;
+          const data = await fetchCharacter(
+            snap.version,
+            account,
+            charName,
+            snap.snapshotName
+          );
+
+          if (!data) {
+            setError("Character not found");
+            setViewMode("characterLookup");
+          } else {
+            setCharacterData(data);
+
+            const league = summary?.leagueName ?? "Unknown";
+            saveCharacter(
+              account,
+              { name: data.name, class: data.ascendancy || data.class, level: data.level },
+              league
+            );
+
+            if (data.pobCode) {
+              setDecoding(true);
+              try {
+                const decoded = decodePobCode(data.pobCode);
+                setDecodedBuild(decoded);
+              } catch { /* silent */ }
+              setDecoding(false);
+            }
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Lookup failed");
+          setViewMode("characterLookup");
+        } finally {
+          setCharacterLoading(false);
+        }
+      })();
+    },
+    [snapshotInfo, summary, saveCharacter]
+  );
+
   const goBack = useCallback(() => {
     if (viewMode === "popularItems") {
       setViewMode("characterResult");
@@ -300,8 +374,13 @@ export function useBuildsData() {
     selectSkill,
     openCharacterLookup,
     lookupCharacter,
+    selectSavedCharacter,
     showPopularItemsForSlot,
     goBack,
     refresh,
+    savedAccounts,
+    removeSavedAccount,
+    removeSavedCharacter,
+    getAccountCharacters,
   };
 }
