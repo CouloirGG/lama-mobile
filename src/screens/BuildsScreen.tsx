@@ -194,13 +194,17 @@ function analyzeBuild(
   decodedBuild: DecodedBuild | null
 ): BuildAnalysis {
   // --- Determine main skill and damage type ---
+  // Use DPS (sustained output) rather than per-hit damage to pick the main skill.
+  // This matters for trigger builds where a fast-hitting triggered spell (e.g. Living Bomb
+  // at 1.4M DPS) outperforms a slow hitter (e.g. Comet at 944K per-hit but 679K DPS).
   let mainSkillName = "";
-  let mainDamage = 0;
+  let mainDps = 0;
 
   for (const sg of character.skillGroups) {
     for (const d of sg.dps) {
-      if (d.damage > mainDamage) {
-        mainDamage = d.damage;
+      const effectiveDps = d.dps > 0 ? d.dps : d.damage;
+      if (effectiveDps > mainDps) {
+        mainDps = effectiveDps;
         mainSkillName = d.name;
       }
     }
@@ -211,14 +215,20 @@ function analyzeBuild(
   }
 
   // --- Detect Cast on Crit (CoC) ---
-  // CoC builds have a spell as the top DPS skill but use attacks to trigger it.
-  // Common pattern: main DPS skill is a spell (Comet) but the build has attack
-  // gems like Cyclone or Ice Shot in the same skill group.
+  // Attack-based CoC: attacks trigger spells via crits (e.g. Cyclone + CoC + Comet).
+  // In POE2, "Cast on Critical" can also trigger from spell crits, so we must
+  // verify the CoC skill group contains BOTH an attack gem AND a spell gem.
+  // Pure spell-trigger builds (spell crits → CoC → another spell) are NOT CoC
+  // for stat purposes — they don't benefit from attack speed.
   let isCastOnCrit = false;
-  const allGemNames = character.skills.map((g) => g.name);
-  const hasCoCGem = allGemNames.some((n) => /Cast on Crit|Cast when Crit/i.test(n));
-  if (hasCoCGem && SPELL_SKILLS.has(mainSkillName)) {
-    isCastOnCrit = true;
+  for (const sg of character.skillGroups) {
+    const hasCoC = sg.gems.some((g) => /Cast on Crit|Cast when Crit/i.test(g));
+    const hasAttackGem = sg.gems.some((g) => ATTACK_SKILLS.has(g));
+    const hasSpellGem = sg.gems.some((g) => SPELL_SKILLS.has(g));
+    if (hasCoC && hasAttackGem && hasSpellGem) {
+      isCastOnCrit = true;
+      break;
+    }
   }
   // Heuristic: if the main DPS is a spell but the character has attack gems
   // in the same skill group, it's likely CoC even without detecting the support
@@ -255,7 +265,7 @@ function analyzeBuild(
         ...(eq.explicitMods ?? []),
         ...(eq.implicitMods ?? []),
         ...(eq.craftedMods ?? []),
-      ].join(" ");
+      ].map(stripBrackets).join(" ");
       if (/attack speed/i.test(mods)) atkMods++;
       if (/spell|cast speed/i.test(mods)) spellMods++;
     }
@@ -292,10 +302,29 @@ function analyzeBuild(
   if (elements.size === 0) elements.add("physical");
 
   // --- Crit detection ---
+  // Check keystones, weapon crit, crit support gems, and crit mods on gear
+  const hasCritGems = character.skills.some(
+    (g) => /critical/i.test(g.name)
+  );
+  const hasCritGear = character.equipment.some((eq) => {
+    const mods = [
+      ...(eq.explicitMods ?? []),
+      ...(eq.implicitMods ?? []),
+      ...(eq.craftedMods ?? []),
+      ...(eq.fracturedMods ?? []),
+      ...(eq.runeMods ?? []),
+      ...(eq.desecratedMods ?? []),
+    ]
+      .map(stripBrackets)
+      .join(" ");
+    return /Critical Hit Chance/i.test(mods) || /Critical Damage Bonus/i.test(mods);
+  });
   const isCrit =
     isCastOnCrit || // CoC builds are always crit
     character.keystones.some((k) => CRIT_KEYSTONES.has(k)) ||
-    (decodedBuild?.weapon?.critChance ?? 0) > 7;
+    (decodedBuild?.weapon?.critChance ?? 0) > 7 ||
+    hasCritGems ||
+    hasCritGear;
 
   // --- Defense type ---
   const hasMoM = character.keystones.includes("Mind Over Matter");
@@ -377,8 +406,10 @@ function analyzeBuild(
     }
   }
 
-  // Mana: useful for MoM builds (they want max mana for bigger damage buffer)
-  const wantsMana = hasMoM;
+  // Mana: useful for casters (casting costs), MoM builds (damage buffer), and MoM+EB.
+  // Only flag as dead for pure attack builds or Blood Magic users.
+  const hasBloodMagic = character.keystones.includes("Blood Magic");
+  const wantsMana = !hasBloodMagic && damageType !== "attack";
   if (!wantsMana) {
     deadModPatterns.push(/\+\d+ to maximum Mana/i);
     deadModReasons.push("mana provides no benefit to this build");
@@ -1572,6 +1603,11 @@ function CurrentItemMods({ item }: { item: CharacterItem }) {
 
 // ─── Mod value parsing ──────────────────────────────────────────
 
+/** Strip poe.ninja bracket notation from mod text: [Tag|Display Text] → Display Text, [Text] → Text */
+function stripBrackets(mod: string): string {
+  return mod.replace(/\[([^|\]]*\|)?([^\]]*)\]/g, "$2");
+}
+
 interface ParsedStats {
   life: number;
   mana: number;
@@ -1695,7 +1731,7 @@ function parseItemStats(item: CharacterItem): ParsedStats {
     ...(item.enchantMods ?? []),
     ...(item.fracturedMods ?? []),
     ...(item.runeMods ?? []),
-  ];
+  ].map(stripBrackets);
 
   for (const mod of allMods) {
     let matched = false;
@@ -1813,7 +1849,7 @@ function ItemStatSummary({
       ...(item.explicitMods ?? []),
       ...(item.craftedMods ?? []),
       ...(item.enchantMods ?? []),
-    ];
+    ].map(stripBrackets);
 
     const found: Array<{ mod: string; reason: string }> = [];
     for (const mod of allMods) {
@@ -1878,7 +1914,7 @@ function ItemStatSummary({
           ...(item.explicitMods ?? []),
           ...(item.craftedMods ?? []),
           ...(item.implicitMods ?? []),
-        ].join(" ");
+        ].map(stripBrackets).join(" ");
         const hasCrit = /crit/i.test(allModText);
         if (!hasCrit) {
           lines.push({

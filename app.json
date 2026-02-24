@@ -27,10 +27,15 @@
       "package": "com.couloirgg.lama.mobile"
     },
     "plugins": [
-      "expo-router",
       "expo-font",
       "expo-asset",
       "expo-web-browser"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d22fcb5f-dfbd-444a-8857-6cb23ddae06e"
+      }
+    }
   }
 }
