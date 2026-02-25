@@ -381,7 +381,9 @@ export type WSMessage =
   | { type: "state_change"; state: string }
   | { type: "log"; time: string; message: string; color?: string }
   | { type: "settings"; settings: Record<string, unknown> }
-  | { type: "watchlist_update"; results: Record<string, WatchlistResult> };
+  | { type: "watchlist_update"; results: Record<string, WatchlistResult> }
+  | { type: "auth_ok" }
+  | { type: "auth_fail"; reason?: string };
 
 export interface LogEntry {
   time: string;

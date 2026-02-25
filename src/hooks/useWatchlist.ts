@@ -20,6 +20,7 @@ import {
   CATEGORIES,
 } from "../services/poe2scout";
 import { searchTrade } from "../services/poe2trade";
+import { tradeRateLimiter } from "../utils/rateLimit";
 
 const STORAGE_KEY = "@lama/watchlist";
 
@@ -373,6 +374,48 @@ export function useWatchlist(league: string) {
       ),
     [watchedItems]
   );
+
+  // ─── Background polling for trade watches (10min) ──────────────
+
+  useEffect(() => {
+    const POLL_INTERVAL = 10 * 60 * 1000; // 10 minutes
+
+    const poll = async () => {
+      const watched = currentWatched.current;
+      const tradeWatches = watched.filter((w) => w.type === "trade");
+      if (tradeWatches.length === 0) return;
+
+      const updatedWatched = [...watched];
+      let changed = false;
+
+      for (let i = 0; i < updatedWatched.length; i++) {
+        const w = updatedWatched[i];
+        if (w.type !== "trade") continue;
+
+        // Respect rate limits
+        if (!tradeRateLimiter.canRequest()) {
+          const wait = tradeRateLimiter.getWaitTime();
+          await new Promise((r) => setTimeout(r, Math.max(wait, 100)));
+        }
+
+        try {
+          const snapshot = await searchTrade(league, w.query);
+          updatedWatched[i] = { ...w, lastResult: snapshot };
+          changed = true;
+        } catch (err) {
+          console.warn(`Trade poll failed for ${w.label}:`, err);
+        }
+      }
+
+      if (changed) {
+        setWatchedItems(updatedWatched);
+        persist(updatedWatched);
+      }
+    };
+
+    const timer = setInterval(poll, POLL_INTERVAL);
+    return () => clearInterval(timer);
+  }, [league, persist]);
 
   // ─── Refresh ───────────────────────────────────────────────────
 
