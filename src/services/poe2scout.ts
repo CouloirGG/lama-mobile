@@ -24,7 +24,10 @@ export type CategoryId =
   | "runes"
   | "maps"
   | "breach"
-  | "delirium";
+  | "delirium"
+  | "idols"
+  | "ultimatum"
+  | "vaultkeys";
 
 interface CategoryDef {
   id: CategoryId;
@@ -53,6 +56,9 @@ export const CATEGORIES: CategoryDef[] = [
   { id: "maps", label: "Maps", type: "unique", slugs: ["map"] },
   { id: "breach", label: "Breach", type: "currency", slugs: ["breach"] },
   { id: "delirium", label: "Delirium", type: "currency", slugs: ["delirium"] },
+  { id: "idols", label: "Idols", type: "currency", slugs: ["idol"] },
+  { id: "ultimatum", label: "Ultimatum", type: "currency", slugs: ["ultimatum"] },
+  { id: "vaultkeys", label: "Vault Keys", type: "currency", slugs: ["vaultkeys"] },
 ];
 
 // ─── Cache ──────────────────────────────────────────────────────

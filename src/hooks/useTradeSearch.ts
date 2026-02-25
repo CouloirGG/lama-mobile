@@ -4,8 +4,10 @@ import type {
   TradeBaseType,
   TradeSearchParams,
   TradeSnapshot,
+  TradeStatDefinition,
+  TradeStatFilter,
 } from "../types";
-import { fetchBaseTypes, searchTrade } from "../services/poe2trade";
+import { fetchBaseTypes, fetchTradeStats, searchTrade } from "../services/poe2trade";
 
 export function useTradeSearch(league: string) {
   const [categories, setCategories] = useState<TradeCategory[]>([]);
@@ -16,6 +18,11 @@ export function useTradeSearch(league: string) {
   const [selectedBaseType, setSelectedBaseType] = useState<TradeBaseType | null>(null);
   const [ilvlMin, setIlvlMin] = useState("");
   const [ilvlMax, setIlvlMax] = useState("");
+
+  // Stat filters
+  const [statFilters, setStatFilters] = useState<TradeStatFilter[]>([]);
+  const [tradeStats, setTradeStats] = useState<TradeStatDefinition[]>([]);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const [result, setResult] = useState<TradeSnapshot | null>(null);
   const [searching, setSearching] = useState(false);
@@ -36,6 +43,20 @@ export function useTradeSearch(league: string) {
     }
   }, [categories.length]);
 
+  // Load stat definitions lazily
+  const loadStats = useCallback(async () => {
+    if (tradeStats.length > 0) return;
+    setStatsLoading(true);
+    try {
+      const stats = await fetchTradeStats();
+      setTradeStats(stats);
+    } catch {
+      // Silent fail — stat autocomplete just won't work
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [tradeStats.length]);
+
   // Drill-down: select category
   const selectCategory = useCallback((cat: TradeCategory) => {
     setSelectedCategory(cat);
@@ -51,6 +72,24 @@ export function useTradeSearch(league: string) {
     setSearchError(null);
   }, []);
 
+  // Stat filter management
+  const addStatFilter = useCallback((stat: TradeStatDefinition) => {
+    if (statFilters.length >= 5) return;
+    setStatFilters(prev => [...prev, { id: stat.id, text: stat.text, min: "", max: "" }]);
+  }, [statFilters.length]);
+
+  const removeStatFilter = useCallback((index: number) => {
+    setStatFilters(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const updateStatFilter = useCallback((index: number, field: "min" | "max", value: string) => {
+    setStatFilters(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  }, []);
+
   // Search trade for selected base type
   const search = useCallback(async () => {
     if (!selectedBaseType) return;
@@ -60,6 +99,7 @@ export function useTradeSearch(league: string) {
       category: selectedCategory?.id,
       ...(ilvlMin ? { ilvlMin: parseInt(ilvlMin, 10) } : {}),
       ...(ilvlMax ? { ilvlMax: parseInt(ilvlMax, 10) } : {}),
+      ...(statFilters.length > 0 ? { statFilters } : {}),
     };
 
     setSearching(true);
@@ -72,7 +112,7 @@ export function useTradeSearch(league: string) {
     } finally {
       setSearching(false);
     }
-  }, [league, selectedBaseType, selectedCategory, ilvlMin, ilvlMax]);
+  }, [league, selectedBaseType, selectedCategory, ilvlMin, ilvlMax, statFilters]);
 
   // Build params for watchlist entry
   const getSearchParams = useCallback((): TradeSearchParams | null => {
@@ -82,8 +122,9 @@ export function useTradeSearch(league: string) {
       category: selectedCategory?.id,
       ...(ilvlMin ? { ilvlMin: parseInt(ilvlMin, 10) } : {}),
       ...(ilvlMax ? { ilvlMax: parseInt(ilvlMax, 10) } : {}),
+      ...(statFilters.length > 0 ? { statFilters } : {}),
     };
-  }, [selectedBaseType, selectedCategory, ilvlMin, ilvlMax]);
+  }, [selectedBaseType, selectedCategory, ilvlMin, ilvlMax, statFilters]);
 
   // Build label for watchlist entry
   const getLabel = useCallback((): string => {
@@ -91,8 +132,9 @@ export function useTradeSearch(league: string) {
     const parts: string[] = [];
     if (ilvlMin) parts.push(`ilvl ${ilvlMin}+`);
     parts.push(selectedBaseType.name);
+    if (statFilters.length > 0) parts.push(`(${statFilters.length} stat${statFilters.length > 1 ? "s" : ""})`);
     return parts.join(" ");
-  }, [selectedBaseType, ilvlMin]);
+  }, [selectedBaseType, ilvlMin, statFilters]);
 
   // Reset all state
   const reset = useCallback(() => {
@@ -100,6 +142,7 @@ export function useTradeSearch(league: string) {
     setSelectedBaseType(null);
     setIlvlMin("");
     setIlvlMax("");
+    setStatFilters([]);
     setResult(null);
     setSearchError(null);
   }, []);
@@ -126,6 +169,15 @@ export function useTradeSearch(league: string) {
     setIlvlMin,
     ilvlMax,
     setIlvlMax,
+
+    // Stat filters
+    tradeStats,
+    statsLoading,
+    loadStats,
+    statFilters,
+    addStatFilter,
+    removeStatFilter,
+    updateStatFilter,
 
     result,
     searching,

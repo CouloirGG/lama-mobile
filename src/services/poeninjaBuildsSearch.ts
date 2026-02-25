@@ -32,7 +32,7 @@
  */
 
 import { decodeFields, fieldAsString, fieldAsMessage } from "../utils/protobufDecoder";
-import type { PopularItem, PopularItemsResult } from "../types";
+import type { PopularItem, PopularItemsResult, PopularKeystone } from "../types";
 
 const BASE_URL = "https://poe.ninja/poe2/api";
 const HEADERS = { "User-Agent": "LAMA-Mobile/1.0" };
@@ -336,4 +336,48 @@ export async function fetchPopularItems(
     items: top,
     currentItem: null,
   };
+}
+
+/**
+ * Fetch popular keystones for a class+skill combo.
+ * Uses the "keystones" dimension from the search API.
+ */
+export async function fetchPopularKeystones(
+  version: string,
+  snapshotName: string,
+  characterClass: string,
+  skill: string
+): Promise<PopularKeystone[]> {
+  const searchResult = await fetchSearch(version, snapshotName, characterClass, skill);
+  if (!searchResult) return [];
+
+  // Find the "keystones" dimension
+  const ksDim = searchResult.dimensions.find((d) => d.name === "keystones");
+  if (!ksDim) return [];
+
+  // Get the dictionary hash for keystones
+  const dictHash =
+    searchResult.dictHashes.get("keystone") ??
+    searchResult.dictHashes.get(ksDim.displayName);
+  if (!dictHash) return [];
+
+  const dict = await fetchDictionary(dictHash);
+  if (!dict) return [];
+
+  const totalCount = searchResult.totalCount || 1;
+  const result: PopularKeystone[] = [];
+
+  for (const entry of ksDim.entries) {
+    if (entry.key >= dict.names.length) continue;
+    const name = dict.names[entry.key];
+    if (!name) continue;
+    result.push({
+      name,
+      count: entry.count,
+      percentage: (entry.count / totalCount) * 100,
+    });
+  }
+
+  result.sort((a, b) => b.count - a.count);
+  return result.slice(0, 20);
 }

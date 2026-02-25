@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { KPIBar, Panel } from "../components";
 import { useSettings } from "../hooks/useSettings";
 import { useWatchlist, FILTER_CATEGORIES } from "../hooks/useWatchlist";
 import { useTradeSearch } from "../hooks/useTradeSearch";
-import type { PricedItem, TradeWatchEntry, TradeSnapshot } from "../types";
+import type { PricedItem, TradeWatchEntry, TradeSnapshot, TradeStatDefinition, TradeStatFilter } from "../types";
 import { formatItemPrice } from "../utils/format";
 
 // ─── Watched Item Row ────────────────────────────────────────────
@@ -209,6 +209,112 @@ function CategoryPills({
   );
 }
 
+// ─── Stat Filter Autocomplete ───────────────────────────────────
+
+function StatFilterAutocomplete({
+  stats,
+  filters,
+  loading,
+  onAdd,
+  onRemove,
+  onUpdate,
+}: {
+  stats: TradeStatDefinition[];
+  filters: TradeStatFilter[];
+  loading: boolean;
+  onAdd: (stat: TradeStatDefinition) => void;
+  onRemove: (index: number) => void;
+  onUpdate: (index: number, field: "min" | "max", value: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  const usedIds = useMemo(() => new Set(filters.map(f => f.id)), [filters]);
+
+  const matches = useMemo(() => {
+    if (search.length < 2) return [];
+    const lower = search.toLowerCase();
+    const result: TradeStatDefinition[] = [];
+    for (const stat of stats) {
+      if (usedIds.has(stat.id)) continue;
+      if (stat.text.toLowerCase().includes(lower)) {
+        result.push(stat);
+        if (result.length >= 15) break;
+      }
+    }
+    return result;
+  }, [search, stats, usedIds]);
+
+  return (
+    <View style={styles.statFilterContainer}>
+      <Text style={styles.tradeLabel}>Stat Filters</Text>
+
+      {/* Existing filters */}
+      {filters.map((f, i) => (
+        <View key={f.id} style={styles.statFilterRow}>
+          <Text style={styles.statFilterText} numberOfLines={1}>{f.text}</Text>
+          <TextInput
+            style={styles.statFilterInput}
+            placeholder="min"
+            placeholderTextColor={Colors.textMuted}
+            value={f.min ?? ""}
+            onChangeText={(v) => onUpdate(i, "min", v)}
+            keyboardType="numeric"
+          />
+          <TextInput
+            style={styles.statFilterInput}
+            placeholder="max"
+            placeholderTextColor={Colors.textMuted}
+            value={f.max ?? ""}
+            onChangeText={(v) => onUpdate(i, "max", v)}
+            keyboardType="numeric"
+          />
+          <Pressable onPress={() => onRemove(i)} hitSlop={8}>
+            <Text style={styles.statFilterRemove}>X</Text>
+          </Pressable>
+        </View>
+      ))}
+
+      {/* Search input for adding new filter */}
+      {filters.length < 5 && (
+        <View>
+          <TextInput
+            style={styles.statFilterSearchInput}
+            placeholder={loading ? "Loading stats..." : "Search stat filters... (2+ chars)"}
+            placeholderTextColor={Colors.textMuted}
+            value={search}
+            onChangeText={(v) => { setSearch(v); setDropdownOpen(true); }}
+            onFocus={() => { if (search.length >= 2) setDropdownOpen(true); }}
+            editable={!loading}
+          />
+
+          {/* Dropdown results */}
+          {dropdownOpen && matches.length > 0 && (
+            <View style={styles.statDropdown}>
+              <ScrollView style={{ maxHeight: 180 }} keyboardShouldPersistTaps="handled">
+                {matches.map((stat) => (
+                  <Pressable
+                    key={stat.id}
+                    style={styles.statDropdownItem}
+                    onPress={() => {
+                      onAdd(stat);
+                      setSearch("");
+                      setDropdownOpen(false);
+                    }}
+                  >
+                    <Text style={styles.statDropdownText} numberOfLines={1}>{stat.text}</Text>
+                    <Text style={styles.statDropdownType}>{stat.type}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
 // ─── Trade Browse Mode ──────────────────────────────────────────
 
 function TradeBrowse({
@@ -224,6 +330,7 @@ function TradeBrowse({
 
   useEffect(() => {
     trade.loadCategories();
+    trade.loadStats();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 1: Category list
@@ -343,6 +450,15 @@ function TradeBrowse({
             keyboardType="number-pad"
           />
         </View>
+
+        <StatFilterAutocomplete
+          stats={trade.tradeStats}
+          filters={trade.statFilters}
+          loading={trade.statsLoading}
+          onAdd={trade.addStatFilter}
+          onRemove={trade.removeStatFilter}
+          onUpdate={trade.updateStatFilter}
+        />
 
         <Pressable
           style={[styles.searchButton, trade.searching && styles.searchButtonDisabled]}
@@ -994,5 +1110,80 @@ const styles = StyleSheet.create({
     color: Colors.gold,
     fontWeight: "600",
     fontSize: 14,
+  },
+
+  // Stat filter autocomplete
+  statFilterContainer: {
+    marginTop: 12,
+  },
+  statFilterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 6,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  statFilterText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 11,
+  },
+  statFilterInput: {
+    width: 52,
+    backgroundColor: Colors.bg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 4,
+    color: Colors.text,
+    fontSize: 11,
+    textAlign: "center",
+    paddingVertical: 3,
+    paddingHorizontal: 4,
+  },
+  statFilterRemove: {
+    color: Colors.red,
+    fontSize: 14,
+    fontWeight: "700",
+    paddingHorizontal: 4,
+  },
+  statFilterSearchInput: {
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 6,
+    color: Colors.text,
+    fontSize: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  statDropdown: {
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.gold,
+    borderRadius: 6,
+    marginTop: 2,
+  },
+  statDropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.border,
+  },
+  statDropdownText: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 11,
+  },
+  statDropdownType: {
+    color: Colors.textMuted,
+    fontSize: 9,
+    marginLeft: 8,
   },
 });

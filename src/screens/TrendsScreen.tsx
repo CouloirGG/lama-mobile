@@ -26,6 +26,20 @@ const RATE_PILLS: { key: RateKey; label: string; short: string }[] = [
   { key: "mirror_to_divine", label: "Mirror \u2192 Divine", short: "Mir\u2192Div" },
 ];
 
+type TimeRange = "7d" | "14d" | "30d";
+
+const TIME_RANGES: { key: TimeRange; label: string; ms: number }[] = [
+  { key: "7d", label: "7D", ms: 7 * 24 * 60 * 60 * 1000 },
+  { key: "14d", label: "14D", ms: 14 * 24 * 60 * 60 * 1000 },
+  { key: "30d", label: "30D", ms: 30 * 24 * 60 * 60 * 1000 },
+];
+
+function filterByTimeRange(history: RateSnapshot[], range: TimeRange): RateSnapshot[] {
+  const rangeMs = TIME_RANGES.find(r => r.key === range)!.ms;
+  const cutoff = Date.now() - rangeMs;
+  return history.filter(s => s.timestamp >= cutoff);
+}
+
 function getRateChartData(
   history: RateSnapshot[],
   key: RateKey
@@ -127,21 +141,28 @@ export default function TrendsScreen() {
   } = useTrendsData(league);
 
   const [activeRate, setActiveRate] = useState<RateKey>("divine_to_chaos");
+  const [timeRange, setTimeRange] = useState<TimeRange>("7d");
+
+  const filteredHistory = useMemo(
+    () => filterByTimeRange(rateHistory, timeRange),
+    [rateHistory, timeRange]
+  );
 
   const chartData = useMemo(
-    () => getRateChartData(rateHistory, activeRate),
-    [rateHistory, activeRate]
+    () => getRateChartData(filteredHistory, activeRate),
+    [filteredHistory, activeRate]
   );
 
   const activePill = RATE_PILLS.find((p) => p.key === activeRate)!;
   const currentValue = rates ? rates[activeRate] : undefined;
 
-  const hasHistory = rateHistory.length >= 2;
-  const firstDate = rateHistory.length > 0 ? rateHistory[0].timestamp : 0;
+  const hasHistory = filteredHistory.length >= 2;
+  const firstDate = filteredHistory.length > 0 ? filteredHistory[0].timestamp : 0;
   const lastDate =
-    rateHistory.length > 0
-      ? rateHistory[rateHistory.length - 1].timestamp
+    filteredHistory.length > 0
+      ? filteredHistory[filteredHistory.length - 1].timestamp
       : 0;
+  const totalSnapshots = rateHistory.length;
 
   // Use poe.ninja 7-day sparkline for div→chaos when no local history
   const ninjaFallbackData = useMemo(() => {
@@ -195,6 +216,28 @@ export default function TrendsScreen() {
               {formatRateValue(currentValue, activeRate)}
             </Text>
           </View>
+
+          {/* Time Range Selector */}
+          <View style={styles.timeRangeRow}>
+            {TIME_RANGES.map((tr) => {
+              const active = tr.key === timeRange;
+              return (
+                <Pressable
+                  key={tr.key}
+                  style={[styles.timeRangePill, active && styles.timeRangePillActive]}
+                  onPress={() => setTimeRange(tr.key)}
+                >
+                  <Text style={[styles.timeRangeText, active && styles.timeRangeTextActive]}>
+                    {tr.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+            <Text style={styles.snapshotCount}>
+              {totalSnapshots} snapshot{totalSnapshots !== 1 ? "s" : ""}
+            </Text>
+          </View>
+
           {displayChartData.length >= 2 ? (
             <View style={styles.chartBody}>
               <Sparkline
@@ -274,6 +317,8 @@ export default function TrendsScreen() {
     hasHistory,
     firstDate,
     lastDate,
+    timeRange,
+    totalSnapshots,
     topGainers,
     topLosers,
     loading,
@@ -399,6 +444,37 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: Colors.gold,
     fontFamily: "monospace",
+  },
+  timeRangeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 8,
+  },
+  timeRangePill: {
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: Colors.input,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  timeRangePillActive: {
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+    borderColor: Colors.gold,
+  },
+  timeRangeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: Colors.textMuted,
+  },
+  timeRangeTextActive: {
+    color: Colors.gold,
+  },
+  snapshotCount: {
+    fontSize: 9,
+    color: Colors.textMuted,
+    marginLeft: "auto",
   },
   chartBody: {
     alignItems: "center",

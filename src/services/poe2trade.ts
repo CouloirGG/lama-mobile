@@ -13,12 +13,14 @@ import type {
   TradeBaseType,
   TradeSearchParams,
   TradeSnapshot,
+  TradeStatDefinition,
 } from "../types";
 
 const TRADE_BASE = "https://www.pathofexile.com/api/trade2";
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour for static base type data
 
 let baseTypeCache: { data: TradeCategory[]; timestamp: number } | null = null;
+let statsCache: { data: TradeStatDefinition[]; timestamp: number } | null = null;
 
 // ─── Rate-limited fetch wrapper ─────────────────────────────────
 
@@ -72,6 +74,35 @@ export async function fetchBaseTypes(): Promise<TradeCategory[]> {
   return result;
 }
 
+// ─── Stat Definitions (for autocomplete) ────────────────────────
+
+export async function fetchTradeStats(): Promise<TradeStatDefinition[]> {
+  if (statsCache && Date.now() - statsCache.timestamp < CACHE_TTL) {
+    return statsCache.data;
+  }
+
+  const res = await rateLimitedFetch(`${TRADE_BASE}/data/stats`);
+  if (!res.ok) {
+    throw new Error(`Trade API stats: HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  const stats: TradeStatDefinition[] = [];
+  for (const group of data.result ?? []) {
+    const groupLabel = group.label ?? "";
+    for (const entry of group.entries ?? []) {
+      stats.push({
+        id: entry.id ?? "",
+        text: entry.text ?? "",
+        type: groupLabel,
+      });
+    }
+  }
+
+  statsCache = { data: stats, timestamp: Date.now() };
+  return stats;
+}
+
 // ─── Query body builder ─────────────────────────────────────────
 
 function buildQuery(params: TradeSearchParams): Record<string, unknown> {
@@ -96,11 +127,32 @@ function buildQuery(params: TradeSearchParams): Record<string, unknown> {
     };
   }
 
+  const query: Record<string, unknown> = {
+    type: params.baseType,
+    filters,
+  };
+
+  // Stat filters
+  if (params.statFilters && params.statFilters.length > 0) {
+    const statGroup: { type: string; filters: Array<Record<string, unknown>> } = {
+      type: "and",
+      filters: [],
+    };
+    for (const sf of params.statFilters) {
+      const value: Record<string, number> = {};
+      if (sf.min !== undefined && sf.min !== "") value.min = parseFloat(sf.min);
+      if (sf.max !== undefined && sf.max !== "") value.max = parseFloat(sf.max);
+      if (Object.keys(value).length > 0) {
+        statGroup.filters.push({ id: sf.id, value });
+      } else {
+        statGroup.filters.push({ id: sf.id });
+      }
+    }
+    query.stats = [statGroup];
+  }
+
   return {
-    query: {
-      type: params.baseType,
-      filters,
-    },
+    query,
     sort: { price: "asc" },
   };
 }

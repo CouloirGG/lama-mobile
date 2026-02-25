@@ -19,6 +19,7 @@ export const NINJA_ITEM_TYPES = [
   { type: "SoulCores",  category: "soulcores" },
   { type: "Ritual",     category: "omens" },
   { type: "Expedition", category: "expedition" },
+  { type: "Abyss",      category: "abyss" },
 ] as const;
 
 const FALLBACK_RATES: ExchangeRates = {

@@ -17,7 +17,7 @@ export {
   fetchNinjaItemLines,
   NINJA_ITEM_TYPES,
 } from "./poeninja";
-export { fetchBaseTypes, searchTrade } from "./poe2trade";
+export { fetchBaseTypes, fetchTradeStats, searchTrade } from "./poe2trade";
 export { loadRateHistory, saveRateSnapshot } from "./rateHistory";
 export { lamaPairing, LAMAPairingClient } from "./lamaPairing";
 export {
@@ -28,4 +28,4 @@ export {
   fetchCharacter,
   clearBuildsCache,
 } from "./poeninjaBuilds";
-export { fetchPopularItems } from "./poeninjaBuildsSearch";
+export { fetchPopularItems, fetchPopularKeystones } from "./poeninjaBuildsSearch";

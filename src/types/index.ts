@@ -142,11 +142,25 @@ export type WatchedItem = ItemWatchEntry | TradeWatchEntry;
 
 // ─── Trade API Types ─────────────────────────────────────────────
 
+export interface TradeStatDefinition {
+  id: string;
+  text: string;
+  type: string; // group label, e.g. "Explicit", "Implicit", "Pseudo"
+}
+
+export interface TradeStatFilter {
+  id: string;
+  text: string;
+  min?: string;
+  max?: string;
+}
+
 export interface TradeSearchParams {
   baseType: string;
   category?: string;
   ilvlMin?: number;
   ilvlMax?: number;
+  statFilters?: TradeStatFilter[];
 }
 
 export interface TradeSnapshot {
@@ -337,6 +351,12 @@ export interface PopularItemsResult {
   slot: string;
   items: PopularItem[];
   currentItem: CharacterItem | null;
+}
+
+export interface PopularKeystone {
+  name: string;
+  count: number;
+  percentage: number;
 }
 
 // ─── Saved Accounts (AsyncStorage persistence) ──────────────────

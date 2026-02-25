@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -28,9 +28,11 @@ import type {
   DecodedBuild,
   PopularItem,
   PopularItemsResult,
+  PopularKeystone,
   SavedAccount,
   SavedCharacter,
 } from "../types";
+import { fetchPopularKeystones } from "../services/poeninjaBuildsSearch";
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -1432,18 +1434,120 @@ function ExpandableEquipItem({
   );
 }
 
+// ─── Build Insights Panel ────────────────────────────────────────
+
+function BuildInsightsPanel({
+  character,
+  snapshotInfo,
+  buildAnalysis,
+}: {
+  character: CharacterData;
+  snapshotInfo: { version: string; snapshotName: string } | null;
+  buildAnalysis: BuildAnalysis | null;
+}) {
+  const [keystones, setKeystones] = useState<PopularKeystone[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!snapshotInfo || !character) return;
+    const charClass = character.ascendancy || character.class;
+    let mainSkill = "";
+    for (const sg of character.skillGroups) {
+      for (const d of sg.dps) {
+        if (d.damage > 0) { mainSkill = d.name; break; }
+      }
+      if (mainSkill) break;
+    }
+    if (!mainSkill && character.skillGroups.length > 0) {
+      mainSkill = character.skillGroups[0].gems[0] ?? "";
+    }
+    setLoading(true);
+    fetchPopularKeystones(snapshotInfo.version, snapshotInfo.snapshotName, charClass, mainSkill)
+      .then(ks => setKeystones(ks))
+      .catch(() => setKeystones([]))
+      .finally(() => setLoading(false));
+  }, [character, snapshotInfo]);
+
+  const userKeystones = useMemo(() => new Set(character.keystones), [character.keystones]);
+
+  // Missing popular keystones (>=20% adoption that user doesn't have)
+  const missingKeystones = useMemo(
+    () => keystones.filter(k => k.percentage >= 20 && !userKeystones.has(k.name)),
+    [keystones, userKeystones]
+  );
+
+  // Archetype tags
+  const archetypeTags = useMemo(() => {
+    if (!buildAnalysis) return [];
+    const tags: string[] = [];
+    if (buildAnalysis.damageType !== "unknown") tags.push(buildAnalysis.damageType);
+    tags.push(...buildAnalysis.elements);
+    if (buildAnalysis.isCastOnCrit) tags.push("CoC");
+    else if (buildAnalysis.isCrit) tags.push("crit");
+    tags.push(buildAnalysis.defenseType);
+    return tags;
+  }, [buildAnalysis]);
+
+  if (!buildAnalysis && !loading && keystones.length === 0) return null;
+
+  return (
+    <View>
+      <Text style={styles.sectionHeader}>BUILD INSIGHTS</Text>
+
+      {/* Archetype Tags */}
+      {archetypeTags.length > 0 && (
+        <Panel style={styles.defensePanel}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+            {archetypeTags.map(tag => (
+              <Text key={tag} style={styles.archetypeTag}>{tag}</Text>
+            ))}
+          </View>
+        </Panel>
+      )}
+
+      {/* Missing Popular Keystones */}
+      {missingKeystones.length > 0 && (
+        <Panel style={styles.defensePanel}>
+          <Text style={styles.defenseSectionLabel}>MISSING POPULAR KEYSTONES</Text>
+          {missingKeystones.map(k => (
+            <View key={k.name} style={styles.keystoneGapRow}>
+              <Text style={styles.keystoneGapName}>{k.name}</Text>
+              <Text style={styles.keystoneGapPct}>{k.percentage.toFixed(0)}% use</Text>
+            </View>
+          ))}
+        </Panel>
+      )}
+
+      {/* Popular Keystones (user has) */}
+      {keystones.filter(k => userKeystones.has(k.name)).length > 0 && (
+        <Panel style={styles.defensePanel}>
+          <Text style={styles.defenseSectionLabel}>YOUR KEYSTONES</Text>
+          {keystones.filter(k => userKeystones.has(k.name)).map(k => (
+            <View key={k.name} style={styles.keystoneGapRow}>
+              <Text style={[styles.keystoneGapName, { color: Colors.gold }]}>{k.name}</Text>
+              <Text style={styles.keystoneGapPct}>{k.percentage.toFixed(0)}%</Text>
+            </View>
+          ))}
+        </Panel>
+      )}
+    </View>
+  );
+}
+
 function CharacterProfileView({
   character,
   decodedBuild,
   decoding,
   onBack,
   onShowPopular,
+  snapshotInfo,
 }: {
   character: import("../types").CharacterData;
   decodedBuild: DecodedBuild | null;
   decoding: boolean;
   onBack: () => void;
   onShowPopular: (slotName: string, currentItem: CharacterItem) => void;
+  snapshotInfo: { version: string; snapshotName: string } | null;
 }) {
   const buildAnalysis = useMemo(
     () => analyzeBuild(character, decodedBuild),
@@ -1497,6 +1601,13 @@ function CharacterProfileView({
           buildAnalysis={buildAnalysis}
         />
       )}
+
+      {/* Build Insights */}
+      <BuildInsightsPanel
+        character={character}
+        snapshotInfo={snapshotInfo}
+        buildAnalysis={buildAnalysis}
+      />
 
       {/* Equipment */}
       {character.equipment.length > 0 && (
@@ -2447,6 +2558,7 @@ export default function BuildsScreen() {
           decoding={builds.decoding}
           onBack={builds.goBack}
           onShowPopular={builds.showPopularItemsForSlot}
+          snapshotInfo={builds.snapshotInfo}
         />
       </SafeAreaView>
     );
@@ -3552,5 +3664,23 @@ const styles = StyleSheet.create({
     color: Colors.gold,
     fontWeight: "600",
     fontSize: 14,
+  },
+
+  // Build Insights
+  keystoneGapRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
+  keystoneGapName: {
+    color: Colors.text,
+    fontSize: 12,
+    flex: 1,
+  },
+  keystoneGapPct: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    fontFamily: "JetBrains Mono",
   },
 });
