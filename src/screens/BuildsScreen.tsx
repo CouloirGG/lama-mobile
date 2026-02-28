@@ -16,7 +16,10 @@ import * as WebBrowser from "expo-web-browser";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors } from "../theme";
 import { Panel } from "../components";
+import ShoppingListView from "../components/ShoppingListView";
 import { useBuildsData } from "../hooks/useBuildsData";
+import { useBuildShoppingList } from "../hooks/useBuildShoppingList";
+import { useSettings } from "../hooks/useSettings";
 import type {
   ClassStatistic,
   PopularSkill,
@@ -1540,6 +1543,7 @@ function CharacterProfileView({
   decoding,
   onBack,
   onShowPopular,
+  onShoppingList,
   snapshotInfo,
 }: {
   character: import("../types").CharacterData;
@@ -1547,6 +1551,7 @@ function CharacterProfileView({
   decoding: boolean;
   onBack: () => void;
   onShowPopular: (slotName: string, currentItem: CharacterItem) => void;
+  onShoppingList: () => void;
   snapshotInfo: { version: string; snapshotName: string } | null;
 }) {
   const buildAnalysis = useMemo(
@@ -1608,6 +1613,13 @@ function CharacterProfileView({
         snapshotInfo={snapshotInfo}
         buildAnalysis={buildAnalysis}
       />
+
+      {/* Shopping List Button */}
+      {character.equipment.length > 0 && (
+        <Pressable style={styles.shoppingListButton} onPress={onShoppingList}>
+          <Text style={styles.shoppingListButtonText}>Shopping List</Text>
+        </Pressable>
+      )}
 
       {/* Equipment */}
       {character.equipment.length > 0 && (
@@ -2546,6 +2558,35 @@ function PopularItemsView({
 
 export default function BuildsScreen() {
   const builds = useBuildsData();
+  const { league } = useSettings();
+  const shoppingList = useBuildShoppingList();
+
+  // ─── Shopping List ──────────────────────────────────────────────
+
+  // Trigger price fetch when entering shopping list mode
+  React.useEffect(() => {
+    if (builds.viewMode === "shoppingList" && builds.characterData) {
+      const rates = {
+        divine_to_chaos: 68,
+        divine_to_exalted: 387,
+        mirror_to_divine: 1,
+      };
+      shoppingList.generateList(builds.characterData.equipment, rates);
+    }
+  }, [builds.viewMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (builds.viewMode === "shoppingList") {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <ShoppingListView
+          slots={shoppingList.slots}
+          totalDivine={shoppingList.totalDivine}
+          loading={shoppingList.loading}
+          onBack={builds.goBack}
+        />
+      </SafeAreaView>
+    );
+  }
 
   // ─── Skill Detail ─────────────────────────────────────────────
 
@@ -2616,6 +2657,7 @@ export default function BuildsScreen() {
           decoding={builds.decoding}
           onBack={builds.goBack}
           onShowPopular={builds.showPopularItemsForSlot}
+          onShoppingList={builds.generateShoppingList}
           snapshotInfo={builds.snapshotInfo}
         />
       </SafeAreaView>
@@ -3448,6 +3490,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   pobButtonText: {
+    color: Colors.gold,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  // Shopping list
+  shoppingListButton: {
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+    borderWidth: 1,
+    borderColor: Colors.gold,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  shoppingListButtonText: {
     color: Colors.gold,
     fontSize: 14,
     fontWeight: "700",

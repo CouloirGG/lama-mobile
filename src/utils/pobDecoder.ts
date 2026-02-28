@@ -6,7 +6,7 @@
 
 import pako from "pako";
 import { XMLParser } from "fast-xml-parser";
-import type { DecodedBuild, DecodedWeapon, DecodedMainSkill } from "../types";
+import type { DecodedBuild, DecodedWeapon, DecodedMainSkill, CharacterItem } from "../types";
 
 // ─── Base64 decode (Hermes has no atob) ──────────────────────────
 
@@ -199,13 +199,112 @@ function parseKeystones(parsed: any): string[] {
 
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-// ─── Main export ─────────────────────────────────────────────────
+// ─── XML parser (shared) ────────────────────────────────────────
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   textNodeName: "#text",
 });
+
+// ─── Equipment extractor ──────────────────────────────────────────
+
+const EQUIPMENT_SLOTS = [
+  "Helmet", "Body Armour", "Gloves", "Boots", "Belt",
+  "Amulet", "Ring", "Ring2", "Weapon 1", "Weapon 2",
+  "Helm", "BodyArmour", "Flask",
+];
+
+function parseItemFromText(itemText: string, slot: string): CharacterItem | null {
+  const lines = itemText.trim().split("\n").map((l) => l.trim());
+  if (lines.length < 2) return null;
+
+  let rarity = "normal";
+  let nameIdx = 0;
+  const rarityMatch = lines[0].match(/^Rarity:\s*(.+)/i);
+  if (rarityMatch) {
+    rarity = rarityMatch[1].toLowerCase().trim();
+    nameIdx = 1;
+  }
+
+  const name = lines[nameIdx] || "";
+  const typeLine = lines[nameIdx + 1] || name;
+
+  const implicitMods: string[] = [];
+  const explicitMods: string[] = [];
+
+  // Simple heuristic: lines after "Implicits:" or mod-like lines
+  let inExplicit = false;
+  for (let i = nameIdx + 2; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || line.startsWith("---") || line.startsWith("{")) continue;
+    if (line.startsWith("Implicits:")) continue;
+    if (line.match(/^\d+$/)) { inExplicit = true; continue; }
+    if (inExplicit || line.includes("%") || line.includes("+") || line.includes("to ")) {
+      explicitMods.push(line);
+      inExplicit = true;
+    } else if (!inExplicit) {
+      implicitMods.push(line);
+    }
+  }
+
+  return {
+    name,
+    typeLine,
+    slot,
+    rarity,
+    implicitMods: implicitMods.length > 0 ? implicitMods : undefined,
+    explicitMods: explicitMods.length > 0 ? explicitMods : undefined,
+  };
+}
+
+function findAllEquipmentFromParsed(parsed: any): CharacterItem[] {
+  const items = parsed?.PathOfBuilding?.Items;
+  if (!items) return [];
+
+  const slots: any[] = [].concat(items.Slot || []);
+  const itemList: any[] = [].concat(items.Item || []);
+
+  const idToText = new Map<string, string>();
+  for (const it of itemList) {
+    const id = it["@_id"] ?? it["@_Id"];
+    const text = typeof it === "string" ? it : it["#text"] ?? "";
+    if (id != null) idToText.set(String(id), String(text));
+  }
+
+  const equipment: CharacterItem[] = [];
+  const seenSlots = new Set<string>();
+
+  for (const slot of slots) {
+    const slotName = slot["@_name"] ?? "";
+    if (!EQUIPMENT_SLOTS.includes(slotName)) continue;
+    if (seenSlots.has(slotName)) continue;
+    seenSlots.add(slotName);
+
+    const itemId = slot["@_itemId"] ?? slot["@_ItemId"] ?? "";
+    const text = idToText.get(String(itemId));
+    if (!text) continue;
+
+    const item = parseItemFromText(text, slotName);
+    if (item) equipment.push(item);
+  }
+
+  return equipment;
+}
+
+/** Extract all equipment from a PoB code string */
+export function findAllEquipment(pobCode: string): CharacterItem[] {
+  try {
+    const compressed = base64ToBytes(pobCode.trim());
+    const xml = pako.inflate(compressed, { to: "string" });
+    const parsed = xmlParser.parse(xml);
+    return findAllEquipmentFromParsed(parsed);
+  } catch {
+    return [];
+  }
+}
+
+// ─── Main export ─────────────────────────────────────────────────
 
 export function decodePobCode(pobCode: string): DecodedBuild | null {
   try {

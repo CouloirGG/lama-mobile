@@ -16,6 +16,7 @@ import type {
   WatchlistResult,
   WSMessage,
   PairingConfig,
+  ScannedItemResult,
 } from "../types";
 
 const CONNECTION_TIMEOUT = 5000;
@@ -195,6 +196,14 @@ export class LAMAPairingClient {
 
   async restartOverlay(league?: string): Promise<void> {
     await this.api("/api/restart", "POST", league ? { league } : undefined);
+  }
+
+  async scanItem(imageBase64: string): Promise<ScannedItemResult> {
+    return this.api<ScannedItemResult>(
+      "/api/companion/scan-item",
+      "POST",
+      { image: imageBase64 }
+    );
   }
 }
 

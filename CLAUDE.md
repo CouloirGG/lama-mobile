@@ -15,13 +15,15 @@ Two modes: **Standalone** (public APIs only) and **Paired** (connects to LAMA de
 ```
 App.tsx                    # Entry point, bottom tab navigator (5 tabs)
 src/
-  components/              # Shared UI: Panel, GoldDivider, KPIBar, Sparkline
+  components/              # Shared UI: Panel, GoldDivider, KPIBar, Sparkline,
+                           #   PriceAlertModal, ItemScanner, ShoppingListView
   screens/                 # Tab screens: Market, Trends, Watch, Builds, LAMA
-  services/                # API clients (poe2scout, poeninja, poe2trade, lamaPairing)
-  hooks/                   # Data hooks (useMarketData, useTrendsData, useWatchlist, etc.)
+  services/                # API clients (poe2scout, poeninja, poe2trade, lamaPairing, notifications)
+  hooks/                   # Data hooks (useMarketData, useTrendsData, useWatchlist,
+                           #   useItemSearch, usePriceAlerts, useBuildShoppingList, etc.)
   theme/                   # POE2 dark theme constants (colors, tierColors, fonts)
   types/                   # All TypeScript interfaces (mirrors LAMA desktop structures)
-  utils/                   # Formatters, POB decoder, protobuf decoder, rate limiter
+  utils/                   # Formatters, POB decoder (incl. findAllEquipment), protobuf decoder, rate limiter
 docs/
   DESIGN.md                # Full architecture and roadmap
   JIRA_BACKLOG.md          # Mapped backlog with story points
@@ -85,11 +87,20 @@ EAS Build configured in `eas.json` (development, preview, production profiles).
 - PoE2 Trade: `https://www.pathofexile.com/api/trade2`
 - LAMA Desktop: `http://<ip>:8450` (REST + WebSocket)
 
+## Console Player Features (Built)
+
+These features make the app useful next to a TV every session, since console has no overlay:
+
+- **Quick Item Search** — Market tab has a universal search bar that searches across ALL cached categories (currency, uniques, gems, fragments, etc.) using two-phase cache seeding via `useItemSearch` hook. Phase 1 loads rates+currency+uniques fast, Phase 2 backfills remaining categories in background.
+- **Price Alerts** — Bell icon on each watched item in Watch tab. Set price thresholds (above/below) in divine/exalted/chaos. Local notifications fire on match with 1-hour cooldown. Uses `expo-notifications` + `usePriceAlerts` hook + `PriceAlertModal` component.
+- **Camera Item Scanner** — Camera icon on Market search bar. Snap a photo of the TV screen. Standalone: photo displayed as reference while typing item name (falls through to quick search). Paired: photo sent to desktop for OCR via `POST /api/companion/scan-item`. Uses `ItemScanner` component.
+- **Build Shopping List** — "Shopping List" button on character profile in Builds tab. Shows gear checklist with current market prices per slot and total build cost. Rares show "--". Uses `useBuildShoppingList` hook + `ShoppingListView` component. PoB decoder extended with `findAllEquipment()`.
+
 ## What's Not Built Yet
 
-- LAMA desktop pairing (WS connection, PIN auth, dashboard mirror, remote control, live logs)
+- Desktop server: `/api/companion/scan-item` endpoint (OCR processing for camera scanner paired mode)
 - Desktop server changes (LAN binding, CORS, `/api/rate-history`, mDNS)
 - Standalone watchlist polling engine
 - Settings screen
-- Push notifications
+- Background fetch for always-on price alerts (`expo-background-fetch` — V2)
 - See `docs/JIRA_BACKLOG.md` for full backlog with priorities

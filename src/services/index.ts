@@ -29,3 +29,8 @@ export {
   clearBuildsCache,
 } from "./poeninjaBuilds";
 export { fetchPopularItems, fetchPopularKeystones } from "./poeninjaBuildsSearch";
+export {
+  setupNotifications,
+  requestPermissions,
+  scheduleLocal,
+} from "./notifications";

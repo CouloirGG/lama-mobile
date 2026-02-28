@@ -13,8 +13,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, tierColors } from "../theme";
 import { KPIBar, Panel } from "../components";
+import PriceAlertModal from "../components/PriceAlertModal";
 import { useSettings } from "../hooks/useSettings";
 import { useWatchlist, FILTER_CATEGORIES } from "../hooks/useWatchlist";
+import { usePriceAlerts } from "../hooks/usePriceAlerts";
 import { useTradeSearch } from "../hooks/useTradeSearch";
 import type { PricedItem, TradeWatchEntry, TradeSnapshot, TradeStatDefinition, TradeStatFilter } from "../types";
 import { formatItemPrice } from "../utils/format";
@@ -25,12 +27,16 @@ function WatchedItemRow({
   item,
   divineToExalted,
   divineToChaos,
+  hasAlert,
   onRemove,
+  onAlert,
 }: {
   item: PricedItem;
   divineToExalted: number;
   divineToChaos: number;
+  hasAlert: boolean;
   onRemove: () => void;
+  onAlert: () => void;
 }) {
   const { priceValue, priceUnit } = formatItemPrice(
     item.divine_value,
@@ -53,6 +59,15 @@ function WatchedItemRow({
         <View style={styles.itemRight}>
           <Text style={styles.itemPrice}>{priceValue}</Text>
           <Text style={styles.itemUnit}>{priceUnit}</Text>
+          <Pressable
+            style={[styles.bellButton, hasAlert && styles.bellButtonActive]}
+            onPress={onAlert}
+            hitSlop={8}
+          >
+            <Text style={[styles.bellButtonText, hasAlert && styles.bellButtonTextActive]}>
+              {hasAlert ? "\u{1F514}" : "\u{1F515}"}
+            </Text>
+          </Pressable>
           <Pressable
             style={styles.removeButton}
             onPress={onRemove}
@@ -533,8 +548,25 @@ export default function WatchScreen() {
     refresh,
   } = useWatchlist(league);
 
+  const {
+    alerts,
+    addAlert,
+    removeAlert,
+    getAlertForItem,
+    checkAlerts,
+  } = usePriceAlerts();
+
+  const [alertModalItem, setAlertModalItem] = useState<string | null>(null);
+
   const divineToExalted = rates?.divine_to_exalted ?? 387;
   const divineToChaos = rates?.divine_to_chaos ?? 68;
+
+  // Check alerts whenever priced items update
+  useEffect(() => {
+    if (pricedItems.length > 0) {
+      checkAlerts(pricedItems, rates);
+    }
+  }, [pricedItems, rates, checkAlerts]);
 
   // ─── Watchlist mode renderers ──────────────────────────────────
 
@@ -544,10 +576,12 @@ export default function WatchScreen() {
         item={item}
         divineToExalted={divineToExalted}
         divineToChaos={divineToChaos}
+        hasAlert={!!getAlertForItem(item.name)}
         onRemove={() => removeItem(item.name)}
+        onAlert={() => setAlertModalItem(item.name)}
       />
     ),
-    [divineToExalted, divineToChaos, removeItem]
+    [divineToExalted, divineToChaos, removeItem, getAlertForItem]
   );
 
   const watchedKeyExtractor = useCallback(
@@ -731,6 +765,18 @@ export default function WatchScreen() {
           />
         </>
       )}
+
+      {/* Price Alert Modal */}
+      {alertModalItem && (
+        <PriceAlertModal
+          visible={!!alertModalItem}
+          itemName={alertModalItem}
+          existingAlert={getAlertForItem(alertModalItem)}
+          onSave={addAlert}
+          onDelete={removeAlert}
+          onClose={() => setAlertModalItem(null)}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -900,6 +946,22 @@ const styles = StyleSheet.create({
   },
   addButtonTextWatched: {
     color: Colors.green,
+    fontSize: 14,
+  },
+  bellButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bellButtonActive: {
+    backgroundColor: "rgba(196, 164, 86, 0.15)",
+  },
+  bellButtonText: {
+    fontSize: 14,
+  },
+  bellButtonTextActive: {
     fontSize: 14,
   },
   removeButton: {

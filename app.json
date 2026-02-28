@@ -33,7 +33,14 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "LAMA needs camera access to scan QR codes for desktop pairing."
+          "cameraPermission": "LAMA needs camera access to scan QR codes and item photos."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#c4a456"
         }
       ]
     ],
@@ -42,6 +49,12 @@
       "eas": {
         "projectId": "d22fcb5f-dfbd-444a-8857-6cb23ddae06e"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d22fcb5f-dfbd-444a-8857-6cb23ddae06e"
     }
   }
 }

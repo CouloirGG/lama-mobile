@@ -14,10 +14,12 @@ import { Colors, tierColors } from "../theme";
 import { KPIBar, Panel } from "../components";
 import { useSettings } from "../hooks/useSettings";
 import { useMarketData } from "../hooks/useMarketData";
+import { useItemSearch } from "../hooks/useItemSearch";
 import { CATEGORIES } from "../services/poe2scout";
 import type { CategoryId } from "../services/poe2scout";
 import type { PricedItem } from "../types";
 import { formatItemPrice } from "../utils/format";
+import ItemScanner from "../components/ItemScanner";
 
 // ─── Item Row ───────────────────────────────────────────────────
 
@@ -112,15 +114,30 @@ export default function MarketScreen() {
     error,
     activeCategory,
     setActiveCategory,
-    searchQuery,
-    setSearchQuery,
+    searchQuery: categorySearchQuery,
+    setSearchQuery: setCategorySearchQuery,
     refresh,
   } = useMarketData(league);
 
-  const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const itemSearch = useItemSearch(league);
 
-  const divineToExalted = rates?.divine_to_exalted ?? 387;
-  const divineToChaos = rates?.divine_to_chaos ?? 68;
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [scannerVisible, setScannerVisible] = useState(false);
+
+  // Use item search rates when available, fall back to market data rates
+  const effectiveRates = itemSearch.rates ?? rates;
+  const divineToExalted = effectiveRates?.divine_to_exalted ?? 387;
+  const divineToChaos = effectiveRates?.divine_to_chaos ?? 68;
+
+  // Determine if we're in cross-category search mode
+  const isGlobalSearch = itemSearch.searchQuery.length >= 2;
+
+  // Unified search handler: drives cross-category search
+  const handleSearchChange = useCallback((text: string) => {
+    itemSearch.setSearchQuery(text);
+    // Also update category search to keep in sync when clearing
+    if (!text) setCategorySearchQuery("");
+  }, [itemSearch, setCategorySearchQuery]);
 
   const toggleExpand = useCallback((name: string) => {
     setExpandedItem((prev) => (prev === name ? null : name));
@@ -144,45 +161,58 @@ export default function MarketScreen() {
     []
   );
 
+  const displayItems = isGlobalSearch ? itemSearch.results : items;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* KPI Bar */}
-      <KPIBar rates={rates} />
+      <KPIBar rates={effectiveRates} />
 
       {/* Search */}
       <View style={styles.searchContainer}>
         <Text style={styles.searchIcon}>&#x1F50D;</Text>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search items..."
+          placeholder="Search all items..."
           placeholderTextColor={Colors.textMuted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
+          value={itemSearch.searchQuery}
+          onChangeText={handleSearchChange}
           autoCorrect={false}
           autoCapitalize="none"
         />
+        {isGlobalSearch ? (
+          <Pressable onPress={() => handleSearchChange("")} hitSlop={8}>
+            <Text style={styles.clearButton}>×</Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={() => setScannerVisible(true)} hitSlop={8}>
+            <Text style={styles.cameraIcon}>&#x1F4F7;</Text>
+          </Pressable>
+        )}
       </View>
 
-      {/* Category Pills */}
-      <View style={styles.pillWrap}>
-        {CATEGORIES.map((cat) => {
-          const active = cat.id === activeCategory;
-          return (
-            <Pressable
-              key={cat.id}
-              style={[styles.pill, active && styles.pillActive]}
-              onPress={() => setActiveCategory(cat.id as CategoryId)}
-            >
-              <Text style={[styles.pillText, active && styles.pillTextActive]}>
-                {cat.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {/* Category Pills — hidden during cross-category search */}
+      {!isGlobalSearch && (
+        <View style={styles.pillWrap}>
+          {CATEGORIES.map((cat) => {
+            const active = cat.id === activeCategory;
+            return (
+              <Pressable
+                key={cat.id}
+                style={[styles.pill, active && styles.pillActive]}
+                onPress={() => setActiveCategory(cat.id as CategoryId)}
+              >
+                <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                  {cat.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
 
       {/* Item List / States */}
-      {error ? (
+      {error && !isGlobalSearch ? (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
           <Pressable style={styles.retryButton} onPress={refresh}>
@@ -191,23 +221,44 @@ export default function MarketScreen() {
         </View>
       ) : (
         <FlatList
-          data={items}
+          data={displayItems}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={
-            items.length === 0 ? styles.emptyList : styles.listContent
+            displayItems.length === 0 ? styles.emptyList : styles.listContent
           }
           refreshControl={
-            <RefreshControl
-              refreshing={loading}
-              onRefresh={refresh}
-              tintColor={Colors.gold}
-              colors={[Colors.gold]}
-              progressBackgroundColor={Colors.card}
-            />
+            !isGlobalSearch ? (
+              <RefreshControl
+                refreshing={loading}
+                onRefresh={refresh}
+                tintColor={Colors.gold}
+                colors={[Colors.gold]}
+                progressBackgroundColor={Colors.card}
+              />
+            ) : undefined
+          }
+          ListFooterComponent={
+            isGlobalSearch && itemSearch.backgroundLoading ? (
+              <Text style={styles.bgLoadingText}>Loading more items...</Text>
+            ) : null
           }
           ListEmptyComponent={
-            loading ? (
+            isGlobalSearch ? (
+              !itemSearch.cacheReady ? (
+                <View style={styles.centered}>
+                  <ActivityIndicator size="large" color={Colors.gold} />
+                  <Text style={styles.loadingText}>Loading item data...</Text>
+                </View>
+              ) : (
+                <View style={styles.centered}>
+                  <Text style={styles.emptyText}>
+                    No results for "{itemSearch.searchQuery}"
+                  </Text>
+                </View>
+              )
+            ) : loading ? (
               <View style={styles.centered}>
                 <ActivityIndicator size="large" color={Colors.gold} />
                 <Text style={styles.loadingText}>Loading items...</Text>
@@ -218,6 +269,18 @@ export default function MarketScreen() {
               </View>
             )
           }
+        />
+      )}
+
+      {/* Camera Scanner Modal */}
+      {scannerVisible && (
+        <ItemScanner
+          visible={scannerVisible}
+          onClose={() => setScannerVisible(false)}
+          onSearchResult={(name) => {
+            setScannerVisible(false);
+            handleSearchChange(name);
+          }}
         />
       )}
     </SafeAreaView>
@@ -254,6 +317,25 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: 14,
     paddingVertical: 10,
+  },
+  clearButton: {
+    color: Colors.textMuted,
+    fontSize: 20,
+    fontWeight: "700",
+    paddingHorizontal: 4,
+  },
+  cameraIcon: {
+    fontSize: 16,
+    paddingHorizontal: 4,
+  },
+
+  // Background loading
+  bgLoadingText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    textAlign: "center",
+    paddingVertical: 12,
+    fontStyle: "italic",
   },
 
   // Pills

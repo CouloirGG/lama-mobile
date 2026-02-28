@@ -206,8 +206,11 @@ export function useLAMAConnection() {
     }
   }, []);
 
+  const isPaired = state.connectionState === "connected";
+
   return {
     ...state,
+    isPaired,
     pair,
     connect,
     disconnect,

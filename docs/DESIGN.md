@@ -90,10 +90,29 @@ Camera-based item scanning remains available as an experimental/optional feature
 
 ### Phase 2 — Enhancements
 
-#### Price Alerts
+#### Price Alerts ✅
 - User sets alert rules: "Notify me when X drops below Y Divine"
-- Standalone: background polling with local notifications
-- Paired: server-side watchlist events forwarded as push
+- Standalone: local notifications via `expo-notifications` with 1-hour cooldown per alert
+- Bell icon on each watched item, PriceAlertModal for threshold configuration
+- V2: always-on background alerts via `expo-background-fetch`
+
+#### Quick Item Search ✅ (Market tab)
+- Universal cross-category search bar on Market tab
+- Two-phase cache seeding: rates+currency+uniques fast, remaining categories in background
+- Category pills hidden during search, restored when cleared
+- `useItemSearch` hook reusable across screens
+
+#### Camera Item Scanner ✅ (Market tab)
+- Camera icon on search bar opens full-screen viewfinder
+- Standalone: photo displayed as reference while typing item name → quick search
+- Paired: photo sent to desktop OCR via `POST /api/companion/scan-item` → result with pricing
+- Desktop endpoint not yet implemented (requires server.py changes)
+
+#### Build Shopping List ✅ (Builds tab)
+- "Shopping List" button on character profile view
+- Per-slot gear prices resolved via poe2scout uniques + cache search
+- Total build cost summary with gold divider
+- PoB decoder extended with `findAllEquipment()` for standalone PoB import
 
 #### Economy Intelligence
 - Per-item historical price charts (where data is available)

@@ -41,7 +41,7 @@
 | LM-20 | Build Market tab with KPI bar (exchange rates) | 3 | P0 | 3-column: Mirror↔Div, Div↔Ex, Div↔Chaos |
 | LM-21 | Implement category browser with pill selector | 2 | P0 | Currency, Uniques, Gems, Fragments, Essences, Runes, Omens |
 | LM-22 | Build item list with tier-colored left border | 3 | P0 | S/A/B/C/D tier coloring, price + unit display |
-| LM-23 | Add fuzzy search across all priced items | 3 | P0 | Search bar with debounced input, filter across categories |
+| LM-23 | ~~Add fuzzy search across all priced items~~ | 3 | P0 | ✅ Done — `useItemSearch` hook with two-phase cache seeding, cross-category search |
 | LM-24 | Build item detail view (tap to expand) | 3 | P1 | Full price breakdown, source attribution, links |
 | LM-25 | Add league selector in settings | 1 | P0 | Persist selection, refetch data on change |
 | LM-26 | Add pull-to-refresh on market list | 1 | P1 | Force cache refresh on pull |
@@ -87,7 +87,7 @@
 | LM-43 | Add "View Listings" expandable section per query | 3 | P1 | Show individual listings with price, account, indexed time |
 | LM-44 | Add "Open Trade" deep link to pathofexile.com | 1 | P1 | Opens trade URL in device browser |
 | LM-45 | Implement query enable/disable toggle | 1 | P1 | Per-query on/off |
-| LM-46 | Add push notifications for price threshold alerts | 5 | P2 | "Notify when cheapest < X" per query |
+| LM-46 | ~~Add push notifications for price threshold alerts~~ | 5 | P2 | ✅ Done — `usePriceAlerts` + `PriceAlertModal` + `expo-notifications`, 1hr cooldown |
 | LM-47 | Paired mode: sync watchlist with desktop over WebSocket | 5 | P1 | Bidirectional — mobile edits push to desktop, desktop results mirror to mobile |
 | LM-48 | Add swipe-to-delete on query cards | 1 | P2 | Confirmation dialog |
 
@@ -143,13 +143,25 @@
 
 ---
 
+## EPIC: LM-E8.5 · Console Player Features
+
+| ID | Story | Points | Priority | Notes |
+|----|-------|--------|----------|-------|
+| LM-75 | ~~Cross-category quick item search on Market tab~~ | 3 | P0 | ✅ Done — `useItemSearch` hook, two-phase cache seeding, debounced search |
+| LM-76 | ~~Price alert notifications on Watch tab~~ | 5 | P1 | ✅ Done — `usePriceAlerts` + `PriceAlertModal` + `expo-notifications` |
+| LM-77 | ~~Camera item scanner on Market tab~~ | 5 | P1 | ✅ Done — `ItemScanner`, standalone photo+search, paired desktop OCR |
+| LM-78 | ~~Build shopping list on Builds tab~~ | 3 | P1 | ✅ Done — `useBuildShoppingList` + `ShoppingListView` + `findAllEquipment()` |
+| LM-79 | Desktop `/api/companion/scan-item` endpoint | 5 | P1 | Desktop-side OCR for camera scanner paired mode |
+
+---
+
 ## EPIC: LM-E9 · Polish & Release
 
 | ID | Story | Points | Priority | Notes |
 |----|-------|--------|----------|-------|
 | LM-80 | Build onboarding flow (first launch) | 3 | P2 | League selection, optional pairing walkthrough |
 | LM-81 | Add home screen widget (exchange rate ticker) | 5 | P3 | iOS WidgetKit + Android App Widget |
-| LM-82 | Camera OCR — experimental unique/currency name matching | 8 | P3 | react-native-camera + Tesseract or ML Kit, accuracy disclaimer |
+| LM-82 | ~~Camera OCR — experimental unique/currency name matching~~ | 8 | P3 | ✅ Done — `ItemScanner` component with expo-camera, standalone photo+search + paired desktop OCR via `scanItem()`. Desktop `/api/companion/scan-item` endpoint still needed. |
 | LM-83 | Implement offline mode with stale data indicators | 3 | P2 | Show last-updated timestamp, dim stale data |
 | LM-84 | App Store submission (iOS) | 3 | P3 | Screenshots, description, review guidelines |
 | LM-85 | Google Play submission (Android) | 3 | P3 | Listing, screenshots, privacy policy |

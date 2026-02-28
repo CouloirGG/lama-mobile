@@ -6,3 +6,6 @@ export { useTradeSearch } from "./useTradeSearch";
 export { useBuildsData } from "./useBuildsData";
 export { useLAMAPairing } from "./useLAMAPairing";
 export { useLAMAConnection } from "./useLAMAConnection";
+export { useItemSearch } from "./useItemSearch";
+export { usePriceAlerts } from "./usePriceAlerts";
+export { useBuildShoppingList } from "./useBuildShoppingList";

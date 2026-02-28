@@ -49,7 +49,8 @@ export type BuildsViewMode =
   | "skillDetail"
   | "characterLookup"
   | "characterResult"
-  | "popularItems";
+  | "popularItems"
+  | "shoppingList";
 
 export function useBuildsData() {
   const [snapshotInfo, setSnapshotInfo] = useState<BuildSnapshotInfo | null>(null);
@@ -324,8 +325,12 @@ export function useBuildsData() {
     [snapshotInfo, summary, saveCharacter]
   );
 
+  const generateShoppingList = useCallback(() => {
+    setViewMode("shoppingList");
+  }, []);
+
   const goBack = useCallback(() => {
-    if (viewMode === "popularItems") {
+    if (viewMode === "popularItems" || viewMode === "shoppingList") {
       setViewMode("characterResult");
       setPopularItemsResult(null);
     } else if (viewMode === "characterResult") {
@@ -376,6 +381,7 @@ export function useBuildsData() {
     lookupCharacter,
     selectSavedCharacter,
     showPopularItemsForSlot,
+    generateShoppingList,
     goBack,
     refresh,
     savedAccounts,

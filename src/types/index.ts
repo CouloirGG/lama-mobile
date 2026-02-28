@@ -390,3 +390,29 @@ export interface LogEntry {
   message: string;
   color?: string;
 }
+
+// ─── Camera Scanner ──────────────────────────────────────────────
+export interface ScannedItemResult {
+  name: string;
+  typeLine?: string;
+  rarity?: string;
+  mods?: string[];
+  price?: {
+    divine_value: number;
+    chaos_value: number;
+    display: string;
+  };
+  error?: string;
+}
+
+// ─── Shopping List ──────────────────────────────────────────────
+export interface ShoppingListSlot {
+  slot: string;
+  itemName: string;
+  typeLine: string;
+  rarity: string;
+  divineValue: number | null;
+  chaosValue: number | null;
+  priceDisplay: string;
+  source: string;
+}

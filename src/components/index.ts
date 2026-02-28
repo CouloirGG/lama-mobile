@@ -19,3 +19,6 @@ export { default as GoldDivider } from "./GoldDivider";
 export { default as KPIBar } from "./KPIBar";
 export { default as Sparkline } from "./Sparkline";
 export { default as SettingsModal } from "./SettingsModal";
+export { default as PriceAlertModal } from "./PriceAlertModal";
+export { default as ItemScanner } from "./ItemScanner";
+export { default as ShoppingListView } from "./ShoppingListView";
