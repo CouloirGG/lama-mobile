@@ -11,10 +11,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors, tierColors } from "../theme";
-import { KPIBar, Panel } from "../components";
+import { KPIBar, Panel, MarketSignals } from "../components";
 import { useSettings } from "../hooks/useSettings";
 import { useMarketData } from "../hooks/useMarketData";
 import { useItemSearch } from "../hooks/useItemSearch";
+import { useTrendsData } from "../hooks/useTrendsData";
 import { CATEGORIES } from "../services/poe2scout";
 import type { CategoryId } from "../services/poe2scout";
 import type { PricedItem } from "../types";
@@ -120,6 +121,7 @@ export default function MarketScreen() {
   } = useMarketData(league);
 
   const itemSearch = useItemSearch(league);
+  const { lines: currencyLines, rateHistory } = useTrendsData(league);
 
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [scannerVisible, setScannerVisible] = useState(false);
@@ -225,6 +227,11 @@ export default function MarketScreen() {
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={
+            !isGlobalSearch && currencyLines.length > 0 ? (
+              <MarketSignals lines={currencyLines} rateHistory={rateHistory} divineToChaos={divineToChaos} />
+            ) : null
+          }
           contentContainerStyle={
             displayItems.length === 0 ? styles.emptyList : styles.listContent
           }

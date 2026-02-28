@@ -22,3 +22,4 @@ export { default as SettingsModal } from "./SettingsModal";
 export { default as PriceAlertModal } from "./PriceAlertModal";
 export { default as ItemScanner } from "./ItemScanner";
 export { default as ShoppingListView } from "./ShoppingListView";
+export { default as MarketSignals } from "./MarketSignals";
