@@ -66,7 +66,8 @@ export function useMarketData(league: string) {
           currentRates.current!
         );
         if (!cancelled) {
-          setItems(result);
+          // Hide items worth less than 1 chaos — they clutter the list
+          setItems(result.filter((i) => i.chaos_value >= 1));
         }
       } catch (err) {
         if (!cancelled) {
@@ -96,7 +97,7 @@ export function useMarketData(league: string) {
         // No search — reload category items
         if (currentRates.current) {
           fetchItems(league, activeCategory, currentRates.current).then(
-            setItems
+            (result) => setItems(result.filter((i) => i.chaos_value >= 1))
           );
         }
         return;
@@ -104,7 +105,7 @@ export function useMarketData(league: string) {
 
       searchTimer.current = setTimeout(() => {
         const results = searchItems(query);
-        setItems(results);
+        setItems(results.filter((i) => i.chaos_value >= 1));
       }, 300);
     },
     [league, activeCategory]
@@ -132,7 +133,7 @@ export function useMarketData(league: string) {
       setLeagues(leaguesResult);
 
       const result = await fetchItems(league, activeCategory, ratesResult);
-      setItems(result);
+      setItems(result.filter((i) => i.chaos_value >= 1));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh failed");
     } finally {

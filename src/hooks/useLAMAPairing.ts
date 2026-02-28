@@ -26,6 +26,7 @@ export function useLAMAPairing() {
 
   const configRef = useRef<PairingConfig | null>(null);
   const authPending = useRef(false);
+  const pairTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── Load saved config on mount ─────────────────────────────────
 
@@ -55,6 +56,7 @@ export function useLAMAPairing() {
   const handleMessage = useCallback((msg: WSMessage) => {
     switch (msg.type) {
       case "auth_ok":
+        if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
         setIsPairing(false);
         setPairError(null);
         authPending.current = false;
@@ -63,6 +65,7 @@ export function useLAMAPairing() {
         break;
 
       case "auth_fail":
+        if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
         setIsPairing(false);
         setPairError(msg.reason ?? "Authentication failed");
         authPending.current = false;
@@ -70,6 +73,7 @@ export function useLAMAPairing() {
         break;
 
       case "init":
+        if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
         setLogs(msg.log.slice(-MAX_LOG_ENTRIES));
         // If init arrives, auth was implicitly OK (no-PIN servers)
         if (authPending.current) {
@@ -129,6 +133,20 @@ export function useLAMAPairing() {
     setIsPairing(true);
     setPairError(null);
     authPending.current = true;
+
+    // Clear any previous timeout
+    if (pairTimeoutRef.current) { clearTimeout(pairTimeoutRef.current); pairTimeoutRef.current = null; }
+
+    // Connection timeout — stop spinning after 8 seconds
+    pairTimeoutRef.current = setTimeout(() => {
+      pairTimeoutRef.current = null;
+      if (authPending.current) {
+        setIsPairing(false);
+        setPairError("Connection timed out — is LAMA Desktop running on this address?");
+        authPending.current = false;
+        lamaPairing.disconnect();
+      }
+    }, 8000);
 
     lamaPairing.configure(cfg);
 

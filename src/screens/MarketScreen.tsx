@@ -4,7 +4,6 @@ import {
   Text,
   TextInput,
   FlatList,
-  ScrollView,
   Pressable,
   ActivityIndicator,
   StyleSheet,
@@ -165,12 +164,7 @@ export default function MarketScreen() {
       </View>
 
       {/* Category Pills */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.pillScroll}
-        contentContainerStyle={styles.pillContent}
-      >
+      <View style={styles.pillWrap}>
         {CATEGORIES.map((cat) => {
           const active = cat.id === activeCategory;
           return (
@@ -185,7 +179,7 @@ export default function MarketScreen() {
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
 
       {/* Item List / States */}
       {error ? (
@@ -263,18 +257,16 @@ const styles = StyleSheet.create({
   },
 
   // Pills
-  pillScroll: {
-    maxHeight: 40,
+  pillWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
     marginBottom: 10,
   },
-  pillContent: {
-    gap: 6,
-    paddingRight: 12,
-  },
   pill: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
     backgroundColor: Colors.card,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -284,7 +276,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.gold,
   },
   pillText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "600",
     color: Colors.textSecondary,
   },

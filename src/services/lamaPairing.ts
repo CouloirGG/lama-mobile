@@ -23,6 +23,7 @@ export class LAMAPairingClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private onMessage: ((msg: WSMessage) => void) | null = null;
   private onConnectionChange: ((connected: boolean) => void) | null = null;
+  private hasConnectedOnce = false;
 
   get baseUrl(): string {
     if (!this.config) throw new Error("Not configured");
@@ -58,6 +59,7 @@ export class LAMAPairingClient {
     const ws = new WebSocket(this.wsUrl);
 
     ws.onopen = () => {
+      this.hasConnectedOnce = true;
       this.onConnectionChange?.(true);
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
@@ -76,7 +78,10 @@ export class LAMAPairingClient {
 
     ws.onclose = () => {
       this.onConnectionChange?.(false);
-      this.reconnectTimer = setTimeout(() => this.connect(), 3000);
+      // Only auto-reconnect if we previously had a successful connection
+      if (this.hasConnectedOnce) {
+        this.reconnectTimer = setTimeout(() => this.connect(), 3000);
+      }
     };
 
     ws.onerror = () => ws.close();
@@ -95,6 +100,7 @@ export class LAMAPairingClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.hasConnectedOnce = false;
     this.ws?.close();
     this.ws = null;
     this.onConnectionChange?.(false);

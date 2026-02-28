@@ -2258,6 +2258,54 @@ function isLikelyRare(item: CharacterItem): boolean {
   return (item.explicitMods?.length ?? 0) > 0 || (item.craftedMods?.length ?? 0) > 0;
 }
 
+/**
+ * Summarize a rare item's mods into a compact label like "Life, Mana, 2 Res".
+ * Used to replace generic "Rare Belt" labels with something meaningful.
+ */
+function summarizeRareMods(item: CharacterItem | null): string | null {
+  if (!item) return null;
+  const allMods = [
+    ...(item.explicitMods ?? []),
+    ...(item.craftedMods ?? []),
+  ].map((m) => m.toLowerCase());
+  if (allMods.length === 0) return null;
+
+  const found: string[] = [];
+  const check = (pattern: RegExp, label: string) => {
+    if (allMods.some((m) => pattern.test(m))) found.push(label);
+  };
+
+  check(/maximum life/i, "Life");
+  check(/maximum mana/i, "Mana");
+  check(/energy shield/i, "ES");
+
+  // Count resistances
+  let resCount = 0;
+  if (allMods.some((m) => /fire resistance/i.test(m))) resCount++;
+  if (allMods.some((m) => /cold resistance/i.test(m))) resCount++;
+  if (allMods.some((m) => /lightning resistance/i.test(m))) resCount++;
+  if (allMods.some((m) => /chaos resistance/i.test(m))) resCount++;
+  if (resCount > 0) found.push(resCount === 1 ? "Res" : `${resCount} Res`);
+
+  check(/attack speed/i, "AtkSpd");
+  check(/cast speed/i, "CastSpd");
+  check(/critical/i, "Crit");
+  check(/movement speed/i, "MoveSpd");
+  check(/armour/i, "Armour");
+  check(/evasion/i, "Evasion");
+
+  if (found.length === 0) return null;
+  return found.join(", ");
+}
+
+/**
+ * Display name for a popular item. Replaces "Rare Belt" etc. with "Crafted Rare".
+ */
+function popularItemDisplayName(name: string): string {
+  if (name.toLowerCase().startsWith("rare ")) return "Crafted Rare";
+  return name;
+}
+
 function MetaInsight({
   items,
   currentItem,
@@ -2280,8 +2328,10 @@ function MetaInsight({
       const match = items[matchIdx];
       const isRareAgg = match.name.toLowerCase().startsWith("rare ");
       if (isRareAgg) {
+        const modDesc = summarizeRareMods(currentItem);
+        const suffix = modDesc ? ` — typically ${modDesc}` : " — you're in the meta";
         result.push({
-          text: `${match.percentage.toFixed(1)}% of builds use a crafted rare here — you're in the meta`,
+          text: `${match.percentage.toFixed(1)}% of builds use a crafted rare here${suffix}`,
           color: Colors.text,
         });
       } else {
@@ -2432,6 +2482,11 @@ function PopularItemsView({
       ) : (
         result.items.map((item, idx) => {
           const isCurrentItem = matchesCurrentItem(item.name, result.currentItem);
+          const isRareAggregate = item.name.toLowerCase().startsWith("rare ");
+          const displayName = popularItemDisplayName(item.name);
+          const modSummary = isRareAggregate && isCurrentItem
+            ? summarizeRareMods(result.currentItem)
+            : null;
 
           return (
             <View
@@ -2452,12 +2507,15 @@ function PopularItemsView({
                     ]}
                     numberOfLines={1}
                   >
-                    {item.name}
+                    {displayName}
                   </Text>
                   {isCurrentItem && (
                     <Text style={styles.yoursLabel}>(yours)</Text>
                   )}
                 </View>
+                {modSummary && (
+                  <Text style={styles.popularItemModSummary}>{modSummary}</Text>
+                )}
                 {item.priceText && (
                   <Text style={styles.popularItemPrice}>{item.priceText}</Text>
                 )}
@@ -3600,6 +3658,12 @@ const styles = StyleSheet.create({
     color: Colors.gold,
     fontSize: 11,
     fontWeight: "700",
+  },
+  popularItemModSummary: {
+    color: Colors.textSecondary,
+    fontSize: 10,
+    fontStyle: "italic",
+    marginBottom: 2,
   },
   popularItemPrice: {
     color: Colors.textMuted,
