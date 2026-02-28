@@ -3,10 +3,11 @@
  *
  * Connects to a running LAMA desktop instance over the local network.
  * Provides WebSocket real-time updates + REST API access.
+ * PIN-authenticated via X-LAMA-PIN header (REST) and ?pin= query param (WebSocket).
  *
  * Default port: 8450
- * Endpoints: /api/status, /api/rate-history, /api/filter-items,
- *            /api/watchlist/*, /ws
+ * Endpoints: /api/status, /api/start, /api/stop, /api/restart,
+ *            /api/companion/verify, /ws
  */
 
 import type {
@@ -17,12 +18,17 @@ import type {
   PairingConfig,
 } from "../types";
 
+const CONNECTION_TIMEOUT = 5000;
+const RECONNECT_DELAY = 3000;
+const AUTH_FAILURE_CODE = 4001;
+
 export class LAMAPairingClient {
   private config: PairingConfig | null = null;
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private onMessage: ((msg: WSMessage) => void) | null = null;
   private onConnectionChange: ((connected: boolean) => void) | null = null;
+  private onAuthFailure: (() => void) | null = null;
   private hasConnectedOnce = false;
 
   get baseUrl(): string {
@@ -32,15 +38,25 @@ export class LAMAPairingClient {
 
   get wsUrl(): string {
     if (!this.config) throw new Error("Not configured");
-    return `ws://${this.config.host}:${this.config.port}/ws`;
+    const base = `ws://${this.config.host}:${this.config.port}/ws`;
+    return this.config.pin ? `${base}?pin=${encodeURIComponent(this.config.pin)}` : base;
   }
 
   get isConfigured(): boolean {
     return this.config !== null;
   }
 
+  get currentConfig(): PairingConfig | null {
+    return this.config;
+  }
+
   configure(config: PairingConfig): void {
     this.config = config;
+  }
+
+  clear(): void {
+    this.disconnect();
+    this.config = null;
   }
 
   setMessageHandler(handler: (msg: WSMessage) => void): void {
@@ -49,6 +65,22 @@ export class LAMAPairingClient {
 
   setConnectionHandler(handler: (connected: boolean) => void): void {
     this.onConnectionChange = handler;
+  }
+
+  setAuthFailureHandler(handler: () => void): void {
+    this.onAuthFailure = handler;
+  }
+
+  // ─── Verification ─────────────────────────────────────────────
+  async verify(): Promise<{ verified: boolean; version?: string; error?: string }> {
+    try {
+      return await this.api<{ verified: boolean; version?: string; error?: string }>(
+        "/api/companion/verify",
+        "POST"
+      );
+    } catch (e: any) {
+      return { verified: false, error: e.message || "Connection failed" };
+    }
   }
 
   // ─── WebSocket ──────────────────────────────────────────────
@@ -76,11 +108,16 @@ export class LAMAPairingClient {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (evt) => {
       this.onConnectionChange?.(false);
+      // Don't auto-reconnect on auth failure
+      if (evt.code === AUTH_FAILURE_CODE) {
+        this.onAuthFailure?.();
+        return;
+      }
       // Only auto-reconnect if we previously had a successful connection
       if (this.hasConnectedOnce) {
-        this.reconnectTimer = setTimeout(() => this.connect(), 3000);
+        this.reconnectTimer = setTimeout(() => this.connect(), RECONNECT_DELAY);
       }
     };
 
@@ -108,15 +145,31 @@ export class LAMAPairingClient {
 
   // ─── REST API ───────────────────────────────────────────────
   private async api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-    const opts: RequestInit = {
-      method,
-      headers: { "Content-Type": "application/json" },
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
     };
+    if (this.config?.pin) {
+      headers["X-LAMA-PIN"] = this.config.pin;
+    }
+
+    const opts: RequestInit = { method, headers };
     if (body) opts.body = JSON.stringify(body);
 
-    const res = await fetch(`${this.baseUrl}${path}`, opts);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT);
+    opts.signal = controller.signal;
+
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, opts);
+      if (res.status === 401 || res.status === 403) {
+        this.onAuthFailure?.();
+        throw new Error("Authentication failed");
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async getStatus(): Promise<LAMAStatus> {

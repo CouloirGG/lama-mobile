@@ -5,3 +5,4 @@ export { useWatchlist } from "./useWatchlist";
 export { useTradeSearch } from "./useTradeSearch";
 export { useBuildsData } from "./useBuildsData";
 export { useLAMAPairing } from "./useLAMAPairing";
+export { useLAMAConnection } from "./useLAMAConnection";

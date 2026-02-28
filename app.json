@@ -29,7 +29,13 @@
     "plugins": [
       "expo-font",
       "expo-asset",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "LAMA needs camera access to scan QR codes for desktop pairing."
+        }
+      ]
     ],
     "extra": {
       "router": {},

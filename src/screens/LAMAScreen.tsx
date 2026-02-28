@@ -1,665 +1,614 @@
-/**
- * LAMAScreen — Desktop pairing hub.
- *
- * Unpaired: IP/port/PIN connection form.
- * Paired: Dashboard with overlay status, KPI grid, remote control, and live log stream.
- */
-
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
-  TextInput,
   Pressable,
-  FlatList,
-  ActivityIndicator,
-  Switch,
+  TextInput,
   StyleSheet,
-  DevSettings,
+  ActivityIndicator,
+  Alert,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Colors, overlayStates } from "../theme";
-import { Panel, GoldDivider } from "../components";
-import { useLAMAPairing } from "../hooks/useLAMAPairing";
-import { useSettings } from "../hooks/useSettings";
-import SettingsModal from "../components/SettingsModal";
-import type { LogEntry, LAMAStatus } from "../types";
+import { CameraView } from "expo-camera";
+import { useLAMAConnection } from "../hooks/useLAMAConnection";
+import { colors, overlayStates } from "../theme";
+import type { PairingConfig } from "../types";
 
-// ─── Log Row ────────────────────────────────────────────────────
-
-function LogRow({ item }: { item: LogEntry }) {
-  const textColor = item.color ?? Colors.text;
+// ─── Helpers ──────────────────────────────────────────────────────
+function StatusPanel({ children, style }: { children: React.ReactNode; style?: any }) {
   return (
-    <View style={styles.logRow}>
-      <Text style={styles.logTime}>{item.time}</Text>
-      <Text style={[styles.logMessage, { color: textColor }]} numberOfLines={2}>
-        {item.message}
-      </Text>
+    <View style={[styles.panel, style]}>
+      {children}
     </View>
   );
 }
 
-// ─── KPI Cell ───────────────────────────────────────────────────
-
-function KPICell({ label, value }: { label: string; value: string }) {
+function StatBox({ label, value }: { label: string; value: string | number }) {
   return (
-    <View style={styles.kpiCell}>
-      <Text style={styles.kpiLabel}>{label}</Text>
-      <Text style={styles.kpiValue}>{value}</Text>
+    <View style={styles.statBox}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 }
 
-// ─── Main Screen ────────────────────────────────────────────────
+// ─── QR Scanner Modal ─────────────────────────────────────────────
+function QRScanner({
+  onScanned,
+  onClose,
+}: {
+  onScanned: (data: string) => void;
+  onClose: () => void;
+}) {
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const scannedRef = useRef(false);
 
-export default function LAMAScreen() {
-  const { league, setLeague } = useSettings();
-  const {
-    connected,
-    status,
-    logs,
-    config,
-    isPairing,
-    pairError,
-    pair,
-    unpair,
-    startOverlay,
-    stopOverlay,
-    restartOverlay,
-    clearLogs,
-  } = useLAMAPairing();
+  useEffect(() => {
+    (async () => {
+      const { Camera } = await import("expo-camera");
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setHasPermission(status === "granted");
+    })();
+  }, []);
 
-  const [settingsVisible, setSettingsVisible] = useState(false);
-
-  if (connected && status) {
+  if (hasPermission === null) {
     return (
-      <PairedView
-        status={status}
-        logs={logs}
-        league={league}
-        setLeague={setLeague}
-        settingsVisible={settingsVisible}
-        setSettingsVisible={setSettingsVisible}
-        onDisconnect={unpair}
-        onStart={() => startOverlay(league)}
-        onStop={stopOverlay}
-        onRestart={() => restartOverlay(league)}
-        onClearLogs={clearLogs}
-      />
+      <View style={styles.scannerOverlay}>
+        <ActivityIndicator color={colors.gold} size="large" />
+      </View>
+    );
+  }
+
+  if (!hasPermission) {
+    return (
+      <View style={styles.scannerOverlay}>
+        <Text style={styles.errorText}>Camera permission is required to scan QR codes</Text>
+        <Pressable style={styles.buttonOutline} onPress={() => Linking.openSettings()}>
+          <Text style={styles.buttonOutlineText}>Open Settings</Text>
+        </Pressable>
+        <Pressable style={[styles.buttonOutline, { marginTop: 12 }]} onPress={onClose}>
+          <Text style={styles.buttonOutlineText}>Cancel</Text>
+        </Pressable>
+      </View>
     );
   }
 
   return (
-    <UnpairedView
-      isPairing={isPairing}
-      pairError={pairError}
-      savedConfig={config}
-      settingsVisible={settingsVisible}
-      setSettingsVisible={setSettingsVisible}
-      league={league}
-      setLeague={setLeague}
-      onPair={pair}
-    />
+    <View style={styles.scannerOverlay}>
+      <View style={styles.scannerFrame}>
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+          onBarcodeScanned={(result) => {
+            if (scannedRef.current) return;
+            scannedRef.current = true;
+            onScanned(result.data);
+          }}
+        />
+        <View style={styles.scannerCrosshair} />
+      </View>
+      <Text style={styles.scannerHint}>Point at the QR code on your desktop</Text>
+      <Pressable style={[styles.buttonOutline, { marginTop: 20 }]} onPress={onClose}>
+        <Text style={styles.buttonOutlineText}>Cancel</Text>
+      </Pressable>
+    </View>
   );
 }
 
-// ─── Unpaired View ──────────────────────────────────────────────
+// ─── Manual Entry Form ────────────────────────────────────────────
+function ManualEntry({ onConnect }: { onConnect: (config: PairingConfig) => void }) {
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("8450");
+  const [pin, setPin] = useState("");
 
-function UnpairedView({
-  isPairing,
-  pairError,
-  savedConfig,
-  settingsVisible,
-  setSettingsVisible,
-  league,
-  setLeague,
-  onPair,
-}: {
-  isPairing: boolean;
-  pairError: string | null;
-  savedConfig: import("../types").PairingConfig | null;
-  settingsVisible: boolean;
-  setSettingsVisible: (v: boolean) => void;
-  league: string;
-  setLeague: (l: string) => void;
-  onPair: (host: string, port: number, pin: string, auto: boolean) => void;
-}) {
-  const [host, setHost] = useState(savedConfig?.host ?? "");
-  const [port, setPort] = useState(savedConfig?.port?.toString() ?? "8450");
-  const [pin, setPin] = useState(savedConfig?.pin ?? "");
-  const [autoConnect, setAutoConnect] = useState(savedConfig?.auto_connect ?? false);
-
-  const handleConnect = () => {
-    const portNum = parseInt(port, 10) || 8450;
-    onPair(host.trim(), portNum, pin.trim(), autoConnect);
-  };
+  const canConnect = host.trim().length > 0 && pin.trim().length > 0;
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>LAMA Pairing</Text>
-        <Pressable onPress={() => setSettingsVisible(true)} hitSlop={12}>
-          <Text style={styles.gearIcon}>&#x2699;</Text>
-        </Pressable>
-      </View>
-
-      <Panel style={styles.formPanel}>
-        <Text style={styles.formLabel}>Desktop IP Address</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="192.168.1.100"
-          placeholderTextColor={Colors.textMuted}
-          value={host}
-          onChangeText={setHost}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="default"
-        />
-
-        <Text style={styles.formLabel}>Port</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="8450"
-          placeholderTextColor={Colors.textMuted}
-          value={port}
-          onChangeText={setPort}
-          keyboardType="numeric"
-        />
-
-        <Text style={styles.formLabel}>PIN (optional)</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter PIN"
-          placeholderTextColor={Colors.textMuted}
-          value={pin}
-          onChangeText={setPin}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-
-        <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Auto-reconnect</Text>
-          <Switch
-            value={autoConnect}
-            onValueChange={setAutoConnect}
-            trackColor={{ false: Colors.border, true: Colors.green }}
-            thumbColor={Colors.text}
+    <StatusPanel style={{ marginTop: 16 }}>
+      <Text style={styles.sectionLabel}>MANUAL CONNECTION</Text>
+      <View style={styles.inputRow}>
+        <View style={{ flex: 2 }}>
+          <Text style={styles.inputLabel}>Host / IP</Text>
+          <TextInput
+            style={styles.input}
+            value={host}
+            onChangeText={setHost}
+            placeholder="192.168.1.x"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
           />
         </View>
-
-        <Pressable
-          style={[styles.connectButton, isPairing && styles.connectButtonDisabled]}
-          onPress={handleConnect}
-          disabled={isPairing || !host.trim()}
-        >
-          {isPairing ? (
-            <ActivityIndicator size="small" color={Colors.bg} />
-          ) : (
-            <Text style={styles.connectButtonText}>Connect</Text>
-          )}
-        </Pressable>
-
-        {pairError && (
-          <Text style={styles.errorText}>{pairError}</Text>
-        )}
-      </Panel>
-
-      <Text style={styles.hintText}>
-        Make sure LAMA Desktop is running and LAN server is enabled on port 8450.
-      </Text>
-
-      {__DEV__ && (
-        <Pressable
-          style={styles.reloadButton}
-          onPress={() => DevSettings.reload()}
-        >
-          <Text style={styles.reloadText}>Reload App</Text>
-        </Pressable>
-      )}
-
-      <SettingsModal
-        visible={settingsVisible}
-        onClose={() => setSettingsVisible(false)}
-        league={league}
-        setLeague={setLeague}
+        <View style={{ flex: 1, marginLeft: 10 }}>
+          <Text style={styles.inputLabel}>Port</Text>
+          <TextInput
+            style={styles.input}
+            value={port}
+            onChangeText={setPort}
+            placeholder="8450"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="number-pad"
+          />
+        </View>
+      </View>
+      <Text style={styles.inputLabel}>PIN</Text>
+      <TextInput
+        style={[styles.input, styles.pinInput]}
+        value={pin}
+        onChangeText={(t) => setPin(t.toUpperCase())}
+        placeholder="A7X9"
+        placeholderTextColor={colors.textMuted}
+        autoCapitalize="characters"
+        maxLength={4}
       />
-    </SafeAreaView>
+      <Pressable
+        style={[styles.buttonPrimary, !canConnect && styles.buttonDisabled]}
+        onPress={() =>
+          canConnect &&
+          onConnect({
+            host: host.trim(),
+            port: parseInt(port, 10) || 8450,
+            pin: pin.trim(),
+            auto_connect: true,
+          })
+        }
+        disabled={!canConnect}
+      >
+        <Text style={styles.buttonPrimaryText}>Connect</Text>
+      </Pressable>
+    </StatusPanel>
   );
 }
 
-// ─── Paired View ────────────────────────────────────────────────
+// ─── Main Screen ──────────────────────────────────────────────────
+export default function LAMAScreen() {
+  const {
+    connectionState,
+    status,
+    error,
+    savedConfig,
+    desktopVersion,
+    pair,
+    connect,
+    disconnect,
+    unpair,
+    startOverlay,
+    stopOverlay,
+    restartOverlay,
+  } = useLAMAConnection();
 
-function PairedView({
-  status,
-  logs,
-  league,
-  setLeague,
-  settingsVisible,
-  setSettingsVisible,
-  onDisconnect,
-  onStart,
-  onStop,
-  onRestart,
-  onClearLogs,
-}: {
-  status: LAMAStatus;
-  logs: LogEntry[];
-  league: string;
-  setLeague: (l: string) => void;
-  settingsVisible: boolean;
-  setSettingsVisible: (v: boolean) => void;
-  onDisconnect: () => void;
-  onStart: () => void;
-  onStop: () => void;
-  onRestart: () => void;
-  onClearLogs: () => void;
-}) {
-  const logListRef = useRef<FlatList<LogEntry>>(null);
-  const overlayState = overlayStates[status.state] ?? overlayStates.stopped;
+  const [showScanner, setShowScanner] = useState(false);
+  const [showManual, setShowManual] = useState(false);
 
-  const isRunning = status.state === "running";
-  const isStopped = status.state === "stopped";
-
-  // Auto-scroll logs
-  useEffect(() => {
-    if (logs.length > 0) {
-      setTimeout(() => {
-        logListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+  // Parse QR code data and pair
+  const handleQRScanned = (data: string) => {
+    setShowScanner(false);
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.host && parsed.port && parsed.pin) {
+        pair({
+          host: parsed.host,
+          port: parsed.port,
+          pin: parsed.pin,
+          auto_connect: true,
+        });
+      } else {
+        Alert.alert("Invalid QR Code", "The scanned code is not a valid LAMA pairing code.");
+      }
+    } catch {
+      Alert.alert("Invalid QR Code", "Could not parse the scanned QR code.");
     }
-  }, [logs.length]);
+  };
 
-  const renderLogItem = useCallback(
-    ({ item }: { item: LogEntry }) => <LogRow item={item} />,
-    []
-  );
+  // ─── QR Scanner ───────────────────────────────────────────────
+  if (showScanner) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <QRScanner onScanned={handleQRScanned} onClose={() => setShowScanner(false)} />
+      </SafeAreaView>
+    );
+  }
 
-  const logKeyExtractor = useCallback(
-    (_: LogEntry, index: number) => `log-${index}`,
-    []
-  );
+  // ─── Connected State ──────────────────────────────────────────
+  if (connectionState === "connected" && status) {
+    const overlayState = overlayStates[status.state as keyof typeof overlayStates] || overlayStates.stopped;
+    const isRunning = status.state === "running";
+    const isStopped = status.state === "stopped";
 
-  return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={[styles.statusDot, { backgroundColor: Colors.green }]} />
-          <Text style={styles.title}>Connected</Text>
-        </View>
-        <View style={styles.headerRight}>
-          <Pressable onPress={() => setSettingsVisible(true)} hitSlop={12}>
-            <Text style={styles.gearIcon}>&#x2699;</Text>
-          </Pressable>
-          <Pressable style={styles.disconnectButton} onPress={onDisconnect}>
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <View style={styles.content}>
+          {/* Header */}
+          <Text style={styles.headerTitle}>LAMA</Text>
+          <Text style={styles.headerSubtitle}>Connected to desktop</Text>
+
+          {/* Overlay State Badge */}
+          <View style={[styles.stateBadge, { backgroundColor: overlayState.bg }]}>
+            <View style={[styles.stateDot, { backgroundColor: overlayState.color }]} />
+            <Text style={[styles.stateText, { color: overlayState.color }]}>
+              {overlayState.label}
+            </Text>
+          </View>
+
+          {/* Stats */}
+          {isRunning && (
+            <StatusPanel style={{ marginTop: 16 }}>
+              <View style={styles.statsRow}>
+                <StatBox label="Uptime" value={`${status.uptime_min || 0}m`} />
+                <StatBox label="Triggers" value={status.triggers || 0} />
+                <StatBox label="Hit Rate" value={`${status.hit_rate || 0}%`} />
+                <StatBox label="Cache" value={status.cache_items || 0} />
+              </View>
+            </StatusPanel>
+          )}
+
+          {/* Controls */}
+          <View style={styles.controlsRow}>
+            {isStopped && (
+              <Pressable style={[styles.controlButton, styles.controlStart]} onPress={startOverlay}>
+                <Text style={styles.controlText}>Start</Text>
+              </Pressable>
+            )}
+            {isRunning && (
+              <>
+                <Pressable style={[styles.controlButton, styles.controlStop]} onPress={stopOverlay}>
+                  <Text style={styles.controlText}>Stop</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.controlButton, styles.controlRestart]}
+                  onPress={restartOverlay}
+                >
+                  <Text style={styles.controlText}>Restart</Text>
+                </Pressable>
+              </>
+            )}
+            {status.state === "starting" && (
+              <ActivityIndicator color={colors.amber} size="small" />
+            )}
+            {status.state === "error" && (
+              <Pressable style={[styles.controlButton, styles.controlStart]} onPress={startOverlay}>
+                <Text style={styles.controlText}>Retry Start</Text>
+              </Pressable>
+            )}
+          </View>
+
+          {/* Desktop version */}
+          {desktopVersion && (
+            <Text style={styles.versionText}>LAMA Desktop {desktopVersion}</Text>
+          )}
+
+          {/* Disconnect */}
+          <Pressable style={styles.disconnectLink} onPress={disconnect}>
             <Text style={styles.disconnectText}>Disconnect</Text>
           </Pressable>
         </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ─── Disconnected / Connecting / Auth Failed ──────────────────
+  return (
+    <SafeAreaView style={styles.container} edges={["top"]}>
+      <View style={styles.content}>
+        {/* Header */}
+        <Text style={styles.headerTitle}>LAMA</Text>
+        <Text style={styles.headerSubtitle}>Companion Mode</Text>
+
+        {/* Error display */}
+        {(error || connectionState === "auth_failed") && (
+          <StatusPanel style={[styles.errorPanel, { marginTop: 16 }]}>
+            <Text style={styles.errorText}>
+              {error || "Authentication failed"}
+            </Text>
+          </StatusPanel>
+        )}
+
+        {/* Connecting spinner */}
+        {connectionState === "connecting" && (
+          <View style={styles.connectingContainer}>
+            <ActivityIndicator color={colors.gold} size="large" />
+            <Text style={styles.connectingText}>Connecting...</Text>
+          </View>
+        )}
+
+        {/* Pairing actions (when disconnected or auth failed) */}
+        {(connectionState === "disconnected" || connectionState === "auth_failed") && (
+          <>
+            {/* Reconnect to saved */}
+            {savedConfig && (
+              <StatusPanel style={{ marginTop: 20 }}>
+                <Pressable style={styles.buttonPrimary} onPress={connect}>
+                  <Text style={styles.buttonPrimaryText}>
+                    Reconnect to {savedConfig.host}
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.forgetLink} onPress={unpair}>
+                  <Text style={styles.forgetText}>Forget</Text>
+                </Pressable>
+              </StatusPanel>
+            )}
+
+            {/* Scan QR Code */}
+            <Pressable
+              style={[styles.buttonPrimary, { marginTop: 20 }]}
+              onPress={() => setShowScanner(true)}
+            >
+              <Text style={styles.buttonPrimaryText}>Scan QR Code</Text>
+            </Pressable>
+
+            {/* Manual entry toggle */}
+            <Pressable
+              style={[styles.buttonOutline, { marginTop: 12 }]}
+              onPress={() => setShowManual(!showManual)}
+            >
+              <Text style={styles.buttonOutlineText}>
+                {showManual ? "Hide Manual Entry" : "Enter Manually"}
+              </Text>
+            </Pressable>
+
+            {showManual && <ManualEntry onConnect={pair} />}
+          </>
+        )}
       </View>
-
-      {/* Overlay status badge */}
-      <View style={[styles.statusBadge, { backgroundColor: overlayState.bg }]}>
-        <View style={[styles.statusBadgeDot, { backgroundColor: overlayState.color }]} />
-        <Text style={[styles.statusBadgeText, { color: overlayState.color }]}>
-          {overlayState.label}
-        </Text>
-      </View>
-
-      {/* KPI Grid */}
-      <View style={styles.kpiGrid}>
-        <KPICell
-          label="DIVINE"
-          value={status.divine_to_chaos ? `${Math.round(status.divine_to_chaos)}c` : "—"}
-        />
-        <KPICell
-          label="UPTIME"
-          value={status.uptime_min ? `${Math.round(status.uptime_min)}m` : "—"}
-        />
-        <KPICell
-          label="TRIGGERS"
-          value={status.triggers?.toString() ?? "—"}
-        />
-        <KPICell
-          label="HIT RATE"
-          value={status.hit_rate != null ? `${Math.round(status.hit_rate * 100)}%` : "—"}
-        />
-        <KPICell
-          label="CACHED"
-          value={status.cache_items?.toString() ?? "—"}
-        />
-        <KPICell
-          label="VERSION"
-          value={status.version ?? "—"}
-        />
-      </View>
-
-      {/* Remote Control */}
-      <View style={styles.controlRow}>
-        <Pressable
-          style={[styles.controlButton, styles.controlStart, isRunning && styles.controlDisabled]}
-          onPress={onStart}
-          disabled={isRunning}
-        >
-          <Text style={[styles.controlText, isRunning && styles.controlTextDisabled]}>Start</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.controlButton, styles.controlStop, isStopped && styles.controlDisabled]}
-          onPress={onStop}
-          disabled={isStopped}
-        >
-          <Text style={[styles.controlText, isStopped && styles.controlTextDisabled]}>Stop</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.controlButton, styles.controlRestart]}
-          onPress={onRestart}
-        >
-          <Text style={styles.controlText}>Restart</Text>
-        </Pressable>
-      </View>
-
-      <GoldDivider />
-
-      {/* Log stream header */}
-      <View style={styles.logHeader}>
-        <Text style={styles.logTitle}>Live Logs</Text>
-        <Pressable onPress={onClearLogs} hitSlop={8}>
-          <Text style={styles.clearText}>Clear</Text>
-        </Pressable>
-      </View>
-
-      {/* Log list */}
-      <FlatList
-        ref={logListRef}
-        data={logs}
-        renderItem={renderLogItem}
-        keyExtractor={logKeyExtractor}
-        style={styles.logList}
-        contentContainerStyle={logs.length === 0 ? styles.logEmpty : undefined}
-        ListEmptyComponent={
-          <Text style={styles.logEmptyText}>No log entries yet</Text>
-        }
-      />
-
-      <SettingsModal
-        visible={settingsVisible}
-        onClose={() => setSettingsVisible(false)}
-        league={league}
-        setLeague={setLeague}
-      />
     </SafeAreaView>
   );
 }
 
-// ─── Styles ─────────────────────────────────────────────────────
-
+// ─── Styles ───────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bg,
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    backgroundColor: colors.bg,
   },
-
-  // Header
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  content: {
+    flex: 1,
+    padding: 20,
     alignItems: "center",
-    marginBottom: 12,
   },
-  headerLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: colors.gold,
+    letterSpacing: 4,
+    marginTop: 24,
   },
-  headerRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  title: {
-    color: Colors.gold,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  gearIcon: {
-    fontSize: 22,
-    color: Colors.textSecondary,
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  disconnectButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: Colors.red,
-  },
-  disconnectText: {
-    color: Colors.red,
+  headerSubtitle: {
     fontSize: 12,
-    fontWeight: "600",
+    color: colors.textSecondary,
+    marginTop: 4,
+    letterSpacing: 1,
   },
-
-  // Status badge
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    gap: 6,
+  panel: {
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+    width: "100%",
+  },
+  sectionLabel: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: colors.textMuted,
+    letterSpacing: 1.5,
     marginBottom: 12,
   },
-  statusBadgeDot: {
+
+  // ─── State Badge ─────────────────────────────────────────────
+  stateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 20,
+  },
+  stateDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
+    marginRight: 8,
   },
-  statusBadgeText: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-
-  // KPI Grid
-  kpiGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginBottom: 12,
-  },
-  kpiCell: {
-    width: "31%",
-    backgroundColor: Colors.card,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    alignItems: "center",
-  },
-  kpiLabel: {
-    fontSize: 9,
-    fontWeight: "700",
-    color: Colors.textMuted,
-    letterSpacing: 1,
-    marginBottom: 2,
-  },
-  kpiValue: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: Colors.gold,
-    fontFamily: "monospace",
-  },
-
-  // Remote control
-  controlRow: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 4,
-  },
-  controlButton: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 6,
-    alignItems: "center",
-    borderWidth: 1,
-  },
-  controlStart: {
-    borderColor: Colors.green,
-    backgroundColor: "rgba(74, 124, 89, 0.12)",
-  },
-  controlStop: {
-    borderColor: Colors.red,
-    backgroundColor: "rgba(168, 50, 50, 0.12)",
-  },
-  controlRestart: {
-    borderColor: Colors.amber,
-    backgroundColor: "rgba(184, 134, 11, 0.12)",
-  },
-  controlDisabled: {
-    opacity: 0.4,
-  },
-  controlText: {
+  stateText: {
     fontSize: 13,
     fontWeight: "700",
-    color: Colors.text,
-  },
-  controlTextDisabled: {
-    color: Colors.textMuted,
+    letterSpacing: 2,
   },
 
-  // Logs
-  logHeader: {
+  // ─── Stats ───────────────────────────────────────────────────
+  statsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "space-around",
+  },
+  statBox: {
     alignItems: "center",
-    marginBottom: 8,
-  },
-  logTitle: {
-    color: Colors.textSecondary,
-    fontSize: 13,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  clearText: {
-    color: Colors.textMuted,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  logList: {
-    flex: 1,
-  },
-  logRow: {
-    flexDirection: "row",
-    paddingVertical: 3,
-    gap: 8,
-  },
-  logTime: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    fontFamily: "monospace",
     minWidth: 60,
   },
-  logMessage: {
-    fontSize: 11,
-    fontFamily: "monospace",
-    flex: 1,
+  statValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
   },
-  logEmpty: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  logEmptyText: {
-    color: Colors.textMuted,
-    fontSize: 13,
-  },
-
-  // Unpaired form
-  formPanel: {
-    padding: 16,
-    marginBottom: 16,
-  },
-  formLabel: {
-    color: Colors.textSecondary,
-    fontSize: 12,
-    fontWeight: "600",
-    marginBottom: 6,
-    marginTop: 12,
-    textTransform: "uppercase",
+  statLabel: {
+    fontSize: 9,
+    color: colors.textMuted,
+    marginTop: 2,
     letterSpacing: 0.5,
   },
-  input: {
-    backgroundColor: Colors.input,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: Colors.text,
-    fontSize: 14,
-  },
-  switchRow: {
+
+  // ─── Controls ────────────────────────────────────────────────
+  controlsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 16,
-  },
-  switchLabel: {
-    color: Colors.textSecondary,
-    fontSize: 13,
-    fontWeight: "600",
-  },
-  connectButton: {
+    gap: 12,
     marginTop: 20,
-    backgroundColor: Colors.gold,
+    justifyContent: "center",
+  },
+  controlButton: {
+    paddingHorizontal: 28,
     paddingVertical: 12,
     borderRadius: 8,
+    minWidth: 100,
     alignItems: "center",
   },
-  connectButtonDisabled: {
-    opacity: 0.5,
+  controlStart: {
+    backgroundColor: "rgba(74,124,89,0.2)",
+    borderWidth: 1,
+    borderColor: colors.green,
   },
-  connectButtonText: {
-    color: Colors.bg,
+  controlStop: {
+    backgroundColor: "rgba(168,50,50,0.2)",
+    borderWidth: 1,
+    borderColor: colors.red,
+  },
+  controlRestart: {
+    backgroundColor: "rgba(184,134,11,0.15)",
+    borderWidth: 1,
+    borderColor: colors.amber,
+  },
+  controlText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+  },
+
+  // ─── Buttons ─────────────────────────────────────────────────
+  buttonPrimary: {
+    backgroundColor: "rgba(196,164,86,0.15)",
+    borderWidth: 1,
+    borderColor: colors.gold,
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+    alignItems: "center",
+    width: "100%",
+  },
+  buttonPrimaryText: {
+    color: colors.gold,
     fontSize: 15,
     fontWeight: "700",
   },
-  errorText: {
-    color: Colors.red,
-    fontSize: 13,
-    marginTop: 12,
-    textAlign: "center",
+  buttonOutline: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    width: "100%",
   },
-  hintText: {
-    color: Colors.textMuted,
-    fontSize: 12,
-    textAlign: "center",
-    lineHeight: 18,
+  buttonOutlineText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  buttonDisabled: {
+    opacity: 0.4,
   },
 
-  // Dev reload
-  reloadButton: {
-    marginTop: 32,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.gold,
-    backgroundColor: "rgba(196, 164, 86, 0.1)",
-    alignSelf: "center",
+  // ─── Inputs ──────────────────────────────────────────────────
+  inputRow: {
+    flexDirection: "row",
+    marginBottom: 10,
   },
-  reloadText: {
-    color: Colors.gold,
-    fontWeight: "700",
+  inputLabel: {
+    fontSize: 10,
+    color: colors.textMuted,
+    marginBottom: 4,
+    letterSpacing: 0.5,
+  },
+  input: {
+    backgroundColor: colors.input,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.text,
     fontSize: 14,
+  },
+  pinInput: {
+    textAlign: "center",
+    fontSize: 22,
+    fontWeight: "700",
+    letterSpacing: 8,
+    marginBottom: 14,
+  },
+
+  // ─── Scanner ─────────────────────────────────────────────────
+  scannerOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  scannerFrame: {
+    width: 260,
+    height: 260,
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: colors.gold,
+  },
+  scannerCrosshair: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    width: 40,
+    height: 40,
+    marginTop: -20,
+    marginLeft: -20,
+    borderWidth: 2,
+    borderColor: colors.gold,
+    borderRadius: 4,
+    opacity: 0.5,
+  },
+  scannerHint: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    marginTop: 16,
+  },
+
+  // ─── Misc ────────────────────────────────────────────────────
+  errorPanel: {
+    borderColor: colors.red,
+  },
+  errorText: {
+    color: colors.red,
+    fontSize: 13,
+    textAlign: "center",
+  },
+  connectingContainer: {
+    alignItems: "center",
+    marginTop: 40,
+    gap: 12,
+  },
+  connectingText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+  },
+  versionText: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 20,
+  },
+  disconnectLink: {
+    marginTop: 24,
+    paddingVertical: 8,
+  },
+  disconnectText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    textDecorationLine: "underline",
+  },
+  forgetLink: {
+    marginTop: 10,
+    alignItems: "center",
+  },
+  forgetText: {
+    color: colors.textMuted,
+    fontSize: 12,
+    textDecorationLine: "underline",
   },
 });
