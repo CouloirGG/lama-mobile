@@ -11,7 +11,8 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { CameraView } from "expo-camera";
-import { useLAMAConnection } from "../hooks/useLAMAConnection";
+import { useNavigation } from "@react-navigation/native";
+import { usePairing } from "../context";
 import { colors, overlayStates } from "../theme";
 import type { PairingConfig } from "../types";
 
@@ -177,7 +178,8 @@ export default function LAMAScreen() {
     startOverlay,
     stopOverlay,
     restartOverlay,
-  } = useLAMAConnection();
+  } = usePairing();
+  const navigation = useNavigation<any>();
 
   const [showScanner, setShowScanner] = useState(false);
   const [showManual, setShowManual] = useState(false);
@@ -212,67 +214,28 @@ export default function LAMAScreen() {
   }
 
   // ─── Connected State ──────────────────────────────────────────
-  if (connectionState === "connected" && status) {
-    const overlayState = overlayStates[status.state as keyof typeof overlayStates] || overlayStates.stopped;
-    const isRunning = status.state === "running";
-    const isStopped = status.state === "stopped";
+  if (connectionState === "connected") {
+    const hostDisplay = savedConfig ? `${savedConfig.host}:${savedConfig.port}` : "LAMA Desktop";
 
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
         <View style={styles.content}>
-          {/* Header */}
           <Text style={styles.headerTitle}>LAMA</Text>
-          <Text style={styles.headerSubtitle}>Connected to desktop</Text>
+          <Text style={styles.headerSubtitle}>Companion Mode</Text>
 
-          {/* Overlay State Badge */}
-          <View style={[styles.stateBadge, { backgroundColor: overlayState.bg }]}>
-            <View style={[styles.stateDot, { backgroundColor: overlayState.color }]} />
-            <Text style={[styles.stateText, { color: overlayState.color }]}>
-              {overlayState.label}
-            </Text>
+          {/* Connected status */}
+          <View style={styles.connectedStatus}>
+            <View style={styles.connectedDot} />
+            <Text style={styles.connectedLabel}>Connected to {hostDisplay}</Text>
           </View>
 
-          {/* Stats */}
-          {isRunning && (
-            <StatusPanel style={{ marginTop: 16 }}>
-              <View style={styles.statsRow}>
-                <StatBox label="Uptime" value={`${status.uptime_min || 0}m`} />
-                <StatBox label="Triggers" value={status.triggers || 0} />
-                <StatBox label="Hit Rate" value={`${status.hit_rate || 0}%`} />
-                <StatBox label="Cache" value={status.cache_items || 0} />
-              </View>
-            </StatusPanel>
-          )}
-
-          {/* Controls */}
-          <View style={styles.controlsRow}>
-            {isStopped && (
-              <Pressable style={[styles.controlButton, styles.controlStart]} onPress={startOverlay}>
-                <Text style={styles.controlText}>Start</Text>
-              </Pressable>
-            )}
-            {isRunning && (
-              <>
-                <Pressable style={[styles.controlButton, styles.controlStop]} onPress={stopOverlay}>
-                  <Text style={styles.controlText}>Stop</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.controlButton, styles.controlRestart]}
-                  onPress={restartOverlay}
-                >
-                  <Text style={styles.controlText}>Restart</Text>
-                </Pressable>
-              </>
-            )}
-            {status.state === "starting" && (
-              <ActivityIndicator color={colors.amber} size="small" />
-            )}
-            {status.state === "error" && (
-              <Pressable style={[styles.controlButton, styles.controlStart]} onPress={startOverlay}>
-                <Text style={styles.controlText}>Retry Start</Text>
-              </Pressable>
-            )}
-          </View>
+          {/* Open Desktop tab */}
+          <Pressable
+            style={styles.openDesktopButton}
+            onPress={() => navigation.navigate("Desktop")}
+          >
+            <Text style={styles.openDesktopText}>Open Desktop Panel</Text>
+          </Pressable>
 
           {/* Desktop version */}
           {desktopVersion && (
@@ -568,6 +531,44 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 13,
     marginTop: 16,
+  },
+
+  // ─── Connected View ────────────────────────────────────────────
+  connectedStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(74, 124, 89, 0.12)",
+    borderWidth: 1,
+    borderColor: colors.green,
+    marginTop: 30,
+  },
+  connectedDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.green,
+  },
+  connectedLabel: {
+    color: colors.green,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  openDesktopButton: {
+    backgroundColor: colors.gold,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    marginTop: 24,
+  },
+  openDesktopText: {
+    color: colors.bg,
+    fontSize: 15,
+    fontWeight: "700",
   },
 
   // ─── Misc ────────────────────────────────────────────────────

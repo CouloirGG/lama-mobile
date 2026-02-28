@@ -17,6 +17,7 @@ import type {
   WSMessage,
   PairingConfig,
   ScannedItemResult,
+  ItemLookupResult,
 } from "../types";
 
 const CONNECTION_TIMEOUT = 5000;
@@ -204,6 +205,24 @@ export class LAMAPairingClient {
       "POST",
       { image: imageBase64 }
     );
+  }
+
+  // ─── Item Lookup ───────────────────────────────────────────────
+  async itemLookup(text: string): Promise<ItemLookupResult> {
+    return this.api<ItemLookupResult>("/api/item-lookup", "POST", { text });
+  }
+
+  // ─── Trade Actions ─────────────────────────────────────────────
+  async tradeWhisper(player: string, token: string, whisper: string): Promise<void> {
+    await this.api("/api/trade/whisper", "POST", { player, token, whisper });
+  }
+
+  async tradeInvite(player: string): Promise<void> {
+    await this.api("/api/trade/invite", "POST", { player });
+  }
+
+  async tradeTradewith(player: string): Promise<void> {
+    await this.api("/api/trade/tradewith", "POST", { player });
   }
 }
 

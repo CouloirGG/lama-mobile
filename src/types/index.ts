@@ -405,6 +405,15 @@ export interface ScannedItemResult {
   error?: string;
 }
 
+// ─── Item Lookup (from server.py /api/item-lookup) ───────────────
+export interface ItemLookupResult {
+  name: string;
+  grade: string;
+  price_divine?: number;
+  price_chaos?: number;
+  mod_highlights: string[];
+}
+
 // ─── Shopping List ──────────────────────────────────────────────
 export interface ShoppingListSlot {
   slot: string;

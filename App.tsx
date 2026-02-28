@@ -2,8 +2,9 @@
  * LAMA Mobile — App Entry Point
  *
  * Bottom tab navigation matching the mockup:
- *   Market | Trends | Watch | LAMA
+ *   Market | Trends | Watch | Builds | [Desktop] | LAMA
  *
+ * Desktop tab only appears when connected to LAMA Desktop.
  * POE2 dark theme applied globally.
  */
 
@@ -11,21 +12,23 @@ import React from "react";
 import { StatusBar } from "expo-status-bar";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import { MarketScreen, TrendsScreen, WatchScreen, BuildsScreen, LAMAScreen } from "./src/screens";
+import { MarketScreen, TrendsScreen, WatchScreen, BuildsScreen, LAMAScreen, DesktopScreen } from "./src/screens";
 import { Colors } from "./src/theme";
+import { PairingProvider, usePairing } from "./src/context";
 
 const Tab = createBottomTabNavigator();
 
 // Tab bar icons (placeholder — replace with @expo/vector-icons or custom SVGs)
 const TAB_ICONS: Record<string, string> = {
-  Market: "📊",
-  Trends: "📈",
-  Watch: "👁",
-  Builds: "⚒",
-  LAMA: "🦙",
+  Market: "\ud83d\udcca",
+  Trends: "\ud83d\udcc8",
+  Watch: "\ud83d\udc41",
+  Builds: "\u2692",
+  Desktop: "\ud83d\udda5\ufe0f",
+  LAMA: "\ud83e\udd99",
 };
 
 function TabIcon({ name, focused }: { name: string; focused: boolean }) {
@@ -47,9 +50,46 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
   );
 }
 
+function AppNavigator() {
+  const { isPaired } = usePairing();
+
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarIcon: ({ focused }) => (
+          <TabIcon name={route.name} focused={focused} />
+        ),
+        tabBarActiveTintColor: Colors.gold,
+        tabBarInactiveTintColor: Colors.textMuted,
+        tabBarStyle: {
+          backgroundColor: Colors.bg,
+          borderTopColor: Colors.borderGold,
+          borderTopWidth: 1,
+          paddingTop: 4,
+        },
+        tabBarLabelStyle: {
+          fontSize: 9,
+          fontWeight: "700",
+          letterSpacing: 0.8,
+          textTransform: "uppercase",
+        },
+      })}
+    >
+      <Tab.Screen name="Market" component={MarketScreen} />
+      <Tab.Screen name="Trends" component={TrendsScreen} />
+      <Tab.Screen name="Watch" component={WatchScreen} />
+      <Tab.Screen name="Builds" component={BuildsScreen} />
+      {isPaired && <Tab.Screen name="Desktop" component={DesktopScreen} />}
+      <Tab.Screen name="LAMA" component={LAMAScreen} />
+    </Tab.Navigator>
+  );
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
+    <PairingProvider>
     <NavigationContainer
       theme={{
         dark: true,
@@ -70,35 +110,9 @@ export default function App() {
       }}
     >
       <StatusBar style="light" backgroundColor={Colors.bg} />
-      <Tab.Navigator
-        screenOptions={({ route }) => ({
-          headerShown: false,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon name={route.name} focused={focused} />
-          ),
-          tabBarActiveTintColor: Colors.gold,
-          tabBarInactiveTintColor: Colors.textMuted,
-          tabBarStyle: {
-            backgroundColor: Colors.bg,
-            borderTopColor: Colors.borderGold,
-            borderTopWidth: 1,
-            paddingTop: 4,
-          },
-          tabBarLabelStyle: {
-            fontSize: 9,
-            fontWeight: "700",
-            letterSpacing: 0.8,
-            textTransform: "uppercase",
-          },
-        })}
-      >
-        <Tab.Screen name="Market" component={MarketScreen} />
-        <Tab.Screen name="Trends" component={TrendsScreen} />
-        <Tab.Screen name="Watch" component={WatchScreen} />
-        <Tab.Screen name="Builds" component={BuildsScreen} />
-        <Tab.Screen name="LAMA" component={LAMAScreen} />
-      </Tab.Navigator>
+      <AppNavigator />
     </NavigationContainer>
+    </PairingProvider>
     </SafeAreaProvider>
   );
 }
