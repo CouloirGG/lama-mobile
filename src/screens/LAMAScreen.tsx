@@ -8,12 +8,22 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { CameraView } from "expo-camera";
 import { useNavigation } from "@react-navigation/native";
 import { usePairing } from "../context";
 import { colors, overlayStates } from "../theme";
+import {
+  getExpoPushToken,
+  loadCloudConfig,
+  saveCloudConfig,
+  clearCloudConfig,
+  cloudRegister,
+  cloudUnregister,
+} from "../services";
+import type { CloudConfig } from "../services";
 import type { PairingConfig } from "../types";
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -163,6 +173,66 @@ function ManualEntry({ onConnect }: { onConnect: (config: PairingConfig) => void
   );
 }
 
+// ─── Cloud Alerts Panel ──────────────────────────────────────────
+function CloudAlertsPanel({ onScanRequest }: { onScanRequest: () => void }) {
+  const [cloudConfig, setCloudConfig] = useState<CloudConfig | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    loadCloudConfig().then(setCloudConfig);
+  }, []);
+
+  const handleDisable = async () => {
+    if (!cloudConfig) return;
+    setLoading(true);
+    try {
+      await cloudUnregister(cloudConfig.relay, cloudConfig.id, cloudConfig.key, cloudConfig.pushToken);
+    } catch (e) {
+      console.warn("Unregister failed (relay may be down):", e);
+    }
+    await clearCloudConfig();
+    setCloudConfig(null);
+    setLoading(false);
+  };
+
+  return (
+    <StatusPanel style={{ marginTop: 20 }}>
+      <Text style={styles.sectionLabel}>CLOUD ALERTS</Text>
+      {cloudConfig ? (
+        <View>
+          <View style={styles.cloudPairedRow}>
+            <View style={styles.cloudPairedDot} />
+            <Text style={styles.cloudPairedText}>Push notifications active</Text>
+          </View>
+          <Text style={styles.cloudDetail}>Relay: {cloudConfig.relay}</Text>
+          <Text style={styles.cloudDetail}>Device: {cloudConfig.id.slice(0, 8)}...</Text>
+          <Pressable
+            style={[styles.buttonOutline, { marginTop: 12 }]}
+            onPress={handleDisable}
+            disabled={loading}
+          >
+            <Text style={styles.buttonOutlineText}>
+              {loading ? "Disabling..." : "Disable Cloud Alerts"}
+            </Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View>
+          <Text style={styles.cloudHint}>
+            Receive push notifications when watchlist matches are found — even away from your PC.
+          </Text>
+          <Pressable
+            style={[styles.buttonPrimary, { marginTop: 10 }]}
+            onPress={onScanRequest}
+          >
+            <Text style={styles.buttonPrimaryText}>Scan Cloud QR Code</Text>
+          </Pressable>
+        </View>
+      )}
+    </StatusPanel>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────
 export default function LAMAScreen() {
   const {
@@ -183,12 +253,39 @@ export default function LAMAScreen() {
 
   const [showScanner, setShowScanner] = useState(false);
   const [showManual, setShowManual] = useState(false);
+  const [scanMode, setScanMode] = useState<"lan" | "cloud">("lan");
+  const cloudPanelRef = useRef<{ reload: () => void }>(null);
 
-  // Parse QR code data and pair
-  const handleQRScanned = (data: string) => {
+  // Parse QR code data and pair (LAN or Cloud)
+  const handleQRScanned = async (data: string) => {
     setShowScanner(false);
     try {
       const parsed = JSON.parse(data);
+
+      // Cloud pairing QR — has `relay` field
+      if (parsed.relay && parsed.id && parsed.key) {
+        const pushToken = await getExpoPushToken();
+        if (!pushToken) {
+          Alert.alert("Push Notifications", "Could not get push token. Please enable notifications in Settings.");
+          return;
+        }
+        const result = await cloudRegister(parsed.relay, parsed.id, parsed.key, pushToken);
+        if (result.error) {
+          Alert.alert("Cloud Pairing Failed", result.error);
+          return;
+        }
+        const config: CloudConfig = {
+          relay: parsed.relay,
+          id: parsed.id,
+          key: parsed.key,
+          pushToken,
+        };
+        await saveCloudConfig(config);
+        Alert.alert("Cloud Alerts Enabled", "You will receive push notifications for watchlist matches.");
+        return;
+      }
+
+      // LAN pairing QR — has host/port/pin
       if (parsed.host && parsed.port && parsed.pin) {
         pair({
           host: parsed.host,
@@ -241,6 +338,9 @@ export default function LAMAScreen() {
           {desktopVersion && (
             <Text style={styles.versionText}>LAMA Desktop {desktopVersion}</Text>
           )}
+
+          {/* Cloud Alerts */}
+          <CloudAlertsPanel onScanRequest={() => { setScanMode("cloud"); setShowScanner(true); }} />
 
           {/* Disconnect */}
           <Pressable style={styles.disconnectLink} onPress={disconnect}>
@@ -312,6 +412,9 @@ export default function LAMAScreen() {
             </Pressable>
 
             {showManual && <ManualEntry onConnect={pair} />}
+
+            {/* Cloud Alerts — works independently of LAN pairing */}
+            <CloudAlertsPanel onScanRequest={() => { setScanMode("cloud"); setShowScanner(true); }} />
           </>
         )}
       </View>
@@ -611,5 +714,35 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     textDecorationLine: "underline",
+  },
+
+  // ─── Cloud Alerts ───────────────────────────────────────────
+  cloudPairedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  cloudPairedDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.green,
+  },
+  cloudPairedText: {
+    color: colors.green,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  cloudDetail: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
+    fontFamily: "monospace",
+  },
+  cloudHint: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

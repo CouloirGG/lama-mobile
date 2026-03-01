@@ -36,6 +36,25 @@ export async function requestPermissions(): Promise<boolean> {
   return status === "granted";
 }
 
+// ─── Expo Push Token (for cloud alerts) ─────────────────────────
+
+const EAS_PROJECT_ID = "d22fcb5f-dfbd-444a-8857-6cb23ddae06e";
+
+export async function getExpoPushToken(): Promise<string | null> {
+  try {
+    const granted = await requestPermissions();
+    if (!granted) return null;
+
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId: EAS_PROJECT_ID,
+    });
+    return tokenData.data; // "ExponentPushToken[xxx]"
+  } catch (e) {
+    console.warn("Failed to get Expo push token:", e);
+    return null;
+  }
+}
+
 // ─── Schedule a local notification ──────────────────────────────
 
 export async function scheduleLocal(

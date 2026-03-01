@@ -20,6 +20,7 @@ import {
   CATEGORIES,
 } from "../services/poe2scout";
 import { searchTrade } from "../services/poe2trade";
+import { setupNotifications, scheduleLocal } from "../services/notifications";
 import { tradeRateLimiter } from "../utils/rateLimit";
 
 const STORAGE_KEY = "@lama/watchlist";
@@ -402,6 +403,15 @@ export function useWatchlist(league: string) {
           const snapshot = await searchTrade(league, w.query);
           updatedWatched[i] = { ...w, lastResult: snapshot };
           changed = true;
+
+          // Notify if listings found
+          if (snapshot.totalListings > 0) {
+            setupNotifications();
+            await scheduleLocal(
+              `Watchlist: ${w.label}`,
+              `${snapshot.totalListings} listed, cheapest ${snapshot.lowestDisplay}`,
+            );
+          }
         } catch (err) {
           console.warn(`Trade poll failed for ${w.label}:`, err);
         }

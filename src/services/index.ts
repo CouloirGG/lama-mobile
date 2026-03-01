@@ -33,4 +33,13 @@ export {
   setupNotifications,
   requestPermissions,
   scheduleLocal,
+  getExpoPushToken,
 } from "./notifications";
+export {
+  loadCloudConfig,
+  saveCloudConfig,
+  clearCloudConfig,
+  register as cloudRegister,
+  unregister as cloudUnregister,
+} from "./cloudAlerts";
+export type { CloudConfig } from "./cloudAlerts";
