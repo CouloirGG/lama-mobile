@@ -9,7 +9,39 @@
  */
 
 import React from "react";
+import * as Sentry from "@sentry/react-native";
 import { StatusBar } from "expo-status-bar";
+
+// ─── Sentry Initialisation ─────────────────────────────────────
+Sentry.init({
+  dsn: "https://4ac5fcf62f02e447d1357b94888ae01c@o4511131557036032.ingest.us.sentry.io/4511131742502912",
+  release: "lama-mobile@0.1.0",
+  environment: "mobile",
+  tracesSampleRate: 0.1,
+  beforeSend(event) {
+    // Redact sensitive data from breadcrumbs and request headers
+    if (event.breadcrumbs) {
+      event.breadcrumbs = event.breadcrumbs.map((bc) => {
+        if (bc.data) {
+          for (const key of Object.keys(bc.data)) {
+            if (/token|key|secret|password|auth/i.test(key)) {
+              bc.data[key] = "[REDACTED]";
+            }
+          }
+        }
+        return bc;
+      });
+    }
+    if (event.request?.headers) {
+      for (const key of Object.keys(event.request.headers)) {
+        if (/token|key|secret|password|auth/i.test(key)) {
+          event.request.headers[key] = "[REDACTED]";
+        }
+      }
+    }
+    return event;
+  },
+});
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { View, Text } from "react-native";
@@ -86,7 +118,7 @@ function AppNavigator() {
   );
 }
 
-export default function App() {
+function App() {
   return (
     <SafeAreaProvider>
     <PairingProvider>
@@ -116,3 +148,5 @@ export default function App() {
     </SafeAreaProvider>
   );
 }
+
+export default Sentry.wrap(App);
